@@ -1,0 +1,15 @@
+[Unit]
+Description=Kruskal personal site
+After=network.target
+
+[Service]
+Type=simple
+User=stu_wr
+WorkingDirectory=/mnt/data_server/home/stu_wr/deepseek-workspace/kruskal
+Environment=KRUSKAL_HOST=127.0.0.1
+Environment=KRUSKAL_PORT=18080
+ExecStart=/mnt/data_server/home/stu_wr/miniconda3/envs/site/bin/python -m uvicorn app.main:app --app-dir backend --host 127.0.0.1 --port 18080
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

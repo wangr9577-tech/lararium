@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Kruskal 环境诊断</title>
+<style>
+  body{font:15px/1.75 -apple-system,system-ui,"Microsoft YaHei",sans-serif;background:#12162e;color:#e6e9f5;padding:18px;margin:0}
+  h1{font-size:18px;margin:0 0 12px}
+  pre{white-space:pre-wrap;word-break:break-all;background:#0b1020;padding:12px;border-radius:10px;font-size:13px}
+  code{color:#8be9fd}
+  .muted{color:#9aa4c0;font-size:13px}
+</style>
+</head>
+<body>
+<h1>Kruskal 环境诊断</h1>
+<div id="out" class="muted">检测中…</div>
+<script>
+(function () {
+  // 用 ES5 语法编写：即使内核很旧也能跑出结果
+  var info = {};
+  function feat(name, fn) { try { info[name] = fn() ? 'yes' : 'no'; } catch (e) { info[name] = 'err'; } }
+
+  try { info.ua = navigator.userAgent; } catch (e) { info.ua = '?'; }
+  try { info.android = (navigator.userAgent.match(/Android\s([\d.]+)/) || [, ''])[1]; } catch (e) {}
+  try { info.brand = (navigator.userAgent.match(/;\s([^;)]+)\sBuild/) || [, ''])[1]; } catch (e) {}
+  try { info.edge = (navigator.userAgent.match(/EdgA?\/([\d.]+)/) || [, ''])[1]; } catch (e) {}
+  try { info.chrome = (navigator.userAgent.match(/Chrome\/([\d.]+)/) || [, ''])[1]; } catch (e) {}
+  try { info.lang = navigator.language; } catch (e) {}
+  try { info.screen = screen.width + 'x' + screen.height + '@' + (window.devicePixelRatio || 1); } catch (e) {}
+
+  feat('es2020_nullish', function () { try { eval('null ?? 1'); return true; } catch (e) { return false; } });
+  feat('optional_chain', function () { try { eval('var o={};o?a:0;o?.a'); return true; } catch (e) { return false; } });
+  feat('array_at', function () { return typeof [].at === 'function'; });
+  feat('serviceWorker', function () { return 'serviceWorker' in navigator; });
+  feat('sw_controller', function () { return !!(navigator.serviceWorker && navigator.serviceWorker.controller); });
+  feat('localStorage', function () { localStorage.setItem('__kt', '1'); localStorage.removeItem('__kt'); return true; });
+  feat('indexedDB', function () { return !!window.indexedDB; });
+  feat('fetch', function () { return typeof fetch === 'function'; });
+  feat('standalone_now', function () { return window.matchMedia('(display-mode: standalone)').matches; });
+
+  var lines = [];
+  for (var k in info) {
+    if (Object.prototype.hasOwnProperty.call(info, k)) lines.push('<b>' + k + '</b>: <code>' + String(info[k]) + '</code>');
+  }
+  document.getElementById('out').innerHTML = '<pre>' + lines.join('\n') + '</pre><p id="rep" class="muted">正在回传报告…</p>';
+
+  // 回传方式：把环境信息塞进一次 GET 的查询串，服务器访问日志会记下来，我据此读取
+  var payload = encodeURIComponent(JSON.stringify(info));
+  if (payload.length > 1600) payload = payload.slice(0, 1600);
+  try {
+    fetch('/healthz?diag=' + payload).then(function (r) {
+      document.getElementById('rep').textContent = '报告已回传（HTTP ' + r.status + '），可以关闭本页了'.replace('，', '，');
+    })['catch'](function (e) {
+      document.getElementById('rep').textContent = '回传失败：' + e;
+    });
+  } catch (e) {
+    document.getElementById('rep').textContent = '回传失败：' + e;
+  }
+})();
+</script>
+</body>
+</html>
