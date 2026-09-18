@@ -81,5 +81,7 @@ cd frontend && npm run dev
 - 全部数据在 `backend/data/`（一个目录即全部），拷贝即迁移，见 `deploy/MIGRATION.md`
 - 备份：`deploy/backup.sh`（sqlite 一致性快照 + openssl 口令加密 `.tar.gz.enc` + `.sha256`；备份口令独立于主密码），还原：`deploy/restore.sh`（校验→解密→换入，旧 data 自动保留为 `data.bak-*`）
 - 删除可救：笔记/相册/论文的删除先进 `data/trash/` 回收站，站内「回收站」可恢复或永久删除
+- 运行时：`/api` 全局鉴权中间件兜底（新路由漏写 `Depends` 也不裸奔）+ CSP 响应头（`KRUSKAL_CSP=0` 可关）+ Markdown 渲染 DOMPurify 净化；上传流式限量，会话 token 过期即清、每用户封顶 20
+- 生产启动用 `bash backend/start.sh`（默认不开 `--reload`；开发热更才加 `KRUSKAL_DEV=1`）
 - 密码忘记 = 数据不可恢复（加密密钥由主密码派生），务必定期备份
 - 翻译走免费 API（有道/百度/MyMemory，可在设置切换），不占 LLM；LLM 仅用于写作助手

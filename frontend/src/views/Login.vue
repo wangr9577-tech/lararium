@@ -83,10 +83,10 @@ onMounted(() => {
     ElMessage.info('网页已上锁，请输入密码解锁')
     history.replaceState(null, '', '/login')
   }
-  fetch('https://v1.hitokoto.cn/?encode=json', { signal: AbortSignal.timeout(3000) })
-    .then((r) => r.json())
+  // 一言走站内代理（P1-K3）：不再未登录先向第三方泄 IP/UA，失败回落本地句子
+  http.get<{ quote: string }>('/site/quote')
     .then((d) => {
-      if (d?.hitokoto) quote.value = d.hitokoto
+      if (d?.quote) quote.value = d.quote
     })
     .catch(() => {
       quote.value = fallbackQuotes[Math.floor(Math.random() * fallbackQuotes.length)]

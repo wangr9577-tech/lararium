@@ -18,12 +18,13 @@ from pydantic import BaseModel, Field
 from .. import config, trashbin, vault
 from ..auth import get_current
 from ..db import db
+from ..upload import read_upload
 from .settings import _load as _load_settings
 
 router = APIRouter(prefix="/api/papers", tags=["papers"])
 
 PAPERS_DIR = config.DATA_DIR / "papers"
-STATUSES = ("想读", "在读", "读完")
+STATUSES = ("想读", "在读", "精读", "读完", "搁置")
 MAX_UPLOAD = 50 * 1024 * 1024  # 50MB
 
 
@@ -74,6 +75,15 @@ class MetaIn(BaseModel):
     category: str = Field(default="", max_length=30)
     subcategory: str = Field(default="", max_length=30)
     link: str = Field(default="", max_length=300)
+    # ---- 科研工作台新增元数据 ----
+    doi: str = Field(default="", max_length=120)
+    arxiv_id: str = Field(default="", max_length=40)
+    year: str = Field(default="", max_length=20)
+    venue: str = Field(default="", max_length=120)
+    authors: list[str] = Field(default_factory=list, max_length=50)
+    abstract: str = Field(default="", max_length=8000)
+    keywords: list[str] = Field(default_factory=list, max_length=30)
+    related_ids: list[str] = Field(default_factory=list, max_length=50)
 
 
 class Highlight(BaseModel):
@@ -109,11 +119,9 @@ async def upload_paper(
     tags_list = [t.strip() for t in tags.replace("，", ",").split(",") if t.strip()][:10]
     created = []
     for f in files:
-        raw = await f.read()
+        raw = await read_upload(f, MAX_UPLOAD, too_big=f"{f.filename} 超过 {MAX_UPLOAD // (1 << 20)}MB 上限")
         if not raw.startswith(b"%PDF"):
             raise HTTPException(400, f"{f.filename} 不是 PDF 文件")
-        if len(raw) > MAX_UPLOAD:
-            raise HTTPException(400, f"{f.filename} 超过 20MB")
         id_ = uuid.uuid4().hex[:12]
         # 单个文件且手动填了标题时用标题，否则用文件名
         name = (title if (title and len(files) == 1) else (f.filename or "未命名论文")).replace(".pdf", "").strip()[:200]
@@ -123,6 +131,8 @@ async def upload_paper(
             "title": name, "author": "", "status": "想读", "tags": tags_list,
             "note": "", "page_count": 0, "category": category.strip()[:30],
             "subcategory": subcategory.strip()[:30], "link": "", "added": now, "updated": now,
+            "doi": "", "arxiv_id": "", "year": "", "venue": "",
+            "authors": [], "abstract": "", "keywords": [], "related_ids": [],
         }
         vault.write_json(_meta_path(id_), meta)
         vault.write_json(_hl_path(id_), {"items": []})
@@ -203,16 +213,131 @@ def put_meta(paper_id: str, body: MetaIn, _user: dict = Depends(get_current)):
     if m is None:
         raise HTTPException(404, "论文不存在")
     if body.status not in STATUSES:
-        raise HTTPException(400, "status 只能是 想读 / 在读 / 读完")
+        raise HTTPException(400, "status 只能是 想读 / 在读 / 精读 / 读完 / 搁置")
     meta = {
         "title": body.title.strip(), "author": body.author.strip(), "status": body.status,
         "tags": [t[:30] for t in body.tags][:10], "note": body.note.strip(),
         "page_count": max(0, body.page_count), "category": body.category.strip()[:30],
         "link": body.link.strip()[:300],
         "added": m.get("added", _now()), "updated": _now(),
+        "doi": body.doi.strip()[:120], "arxiv_id": body.arxiv_id.strip()[:40],
+        "year": body.year.strip()[:20], "venue": body.venue.strip()[:120],
+        "authors": [a[:120] for a in body.authors][:50], "abstract": body.abstract.strip()[:8000],
+        "keywords": [k[:30] for k in body.keywords][:30],
+        "related_ids": [r[:40] for r in body.related_ids][:50],
+        "subcategory": body.subcategory.strip()[:30],
     }
     vault.write_json(_meta_path(paper_id), meta)
     return {"id": paper_id, **meta}
+
+
+class ImportMetaIn(BaseModel):
+    source: str = Field(pattern="^(arxiv|doi)$")
+    id: str = Field(min_length=1, max_length=200)
+
+
+@router.post("/import-meta")
+def import_meta(body: ImportMetaIn, _user: dict = Depends(get_current)):
+    """按 arXiv id 或 DOI 拉取元数据（arXiv API / doi.org），返回可直接写入的字段。"""
+    import urllib.parse
+    import urllib.request
+
+    meta: dict = {}
+    try:
+        if body.source == "arxiv":
+            url = f"http://export.arxiv.org/api/query?id_list={urllib.parse.quote(body.id.strip())}"
+            with urllib.request.urlopen(url, timeout=15) as resp:
+                xml = resp.read().decode("utf-8")
+            import re
+            def _pick(tag: str) -> str:
+                m = re.search(fr"<{tag}[^>]*>(.*?)</{tag}>", xml, re.S)
+                return re.sub(r"<[^>]+>", "", m.group(1)).strip() if m else ""
+            title = _pick("title").replace("\n ", "")
+            summary = _pick("summary")
+            authors = re.findall(r"<name>(.*?)</name>", xml)
+            meta = {
+                "title": title[:200], "abstract": summary[:8000],
+                "authors": [a.strip()[:120] for a in authors][:50],
+                "arxiv_id": body.id.strip()[:40], "year": (re.search(r"20\d{2}", xml) or [None, ""])[0] if re.search(r"20\d{2}", xml) else "",
+            }
+            if not title:
+                raise HTTPException(404, "arXiv 未找到该论文")
+        else:  # doi
+            url = f"https://api.crossref.org/works/{urllib.parse.quote(body.id.strip())}"
+            with urllib.request.urlopen(url, timeout=15) as resp:
+                import json
+                data = json.loads(resp.read().decode("utf-8"))["message"]
+            auths = [a.get("given", "") + " " + a.get("family", "") for a in data.get("author", [])]
+            meta = {
+                "title": (data.get("title") or [""])[0][:200],
+                "doi": body.id.strip()[:120],
+                "year": str(data.get("issued", {}).get("date-parts", [[""]])[0][0])[:20],
+                "venue": (data.get("container-title") or [""])[0][:120],
+                "authors": [a.strip()[:120] for a in auths][:50],
+                "abstract": (re.sub(r"<[^>]+>", "", data.get("abstract", "")) if data.get("abstract") else "")[:8000],
+            }
+            if not meta["title"]:
+                raise HTTPException(404, "DOI 未找到该文献")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(502, f"拉取元数据失败（服务器网络）：{e}")
+    return {"source": body.source, "meta": meta}
+
+
+class RelatedIn(BaseModel):
+    related_id: str = Field(min_length=1, max_length=40)
+
+
+@router.post("/{paper_id}/related")
+def add_related(paper_id: str, body: RelatedIn, _user: dict = Depends(get_current)):
+    """建立论文间双向关联（related_ids）。"""
+    m = _load_meta(paper_id)
+    other = _load_meta(body.related_id)
+    if m is None or other is None:
+        raise HTTPException(404, "论文不存在")
+    cur = [r for r in m.get("related_ids", []) if r != body.related_id]
+    new = cur + [body.related_id]
+    m["related_ids"] = new[:50]
+    m["updated"] = _now()
+    vault.write_json(_meta_path(paper_id), m)
+    # 反向
+    o = [r for r in other.get("related_ids", []) if r != paper_id]
+    other["related_ids"] = (o + [paper_id])[:50]
+    other["updated"] = _now()
+    vault.write_json(_meta_path(body.related_id), other)
+    return {"ok": True, "related_ids": new}
+
+
+class ToCardIn(BaseModel):
+    text: str = Field(min_length=1, max_length=6000)
+    hl_id: str = Field(default="", max_length=60)
+    title: str = Field(default="", max_length=200)
+
+
+@router.post("/{paper_id}/to-card")
+def paper_to_card(paper_id: str, body: ToCardIn, _user: dict = Depends(get_current)):
+    """论文高亮/选中文本 → 一键生成卡片（M2 联动）。"""
+    m = _load_meta(paper_id)
+    if m is None:
+        raise HTTPException(404, "论文不存在")
+    from .cards import create_card, CardIn
+    text = body.text.strip()
+    title = body.title.strip() or (text[:40] + ("…" if len(text) > 40 else ""))
+    card = create_card(CardIn(
+        title=title, content=f"> 摘录自《{m.get('title', '')}》{('（高亮 ' + body.hl_id + '）') if body.hl_id else ''}\n\n{text}",
+        paper_id=paper_id, ref_type="highlight", tags=["论文摘录"],
+    ), _user)
+    if body.hl_id:
+        try:
+            hl = vault.read_json(_hl_path(paper_id))
+            for h in hl.get("items", []):
+                if h.get("id") == body.hl_id:
+                    h.setdefault("card_id", card["id"])
+            vault.write_json(_hl_path(paper_id), hl)
+        except Exception:
+            pass
+    return {"card": card}
 
 
 

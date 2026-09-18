@@ -1,15 +1,22 @@
 [Unit]
 Description=Kruskal personal site
 After=network.target
+# 频繁崩溃时限制重启风暴：300 秒内最多 5 次
+StartLimitIntervalSec=300
+StartLimitBurst=5
 
 [Service]
 Type=simple
 User=stu_wr
 WorkingDirectory=/mnt/data_server/home/stu_wr/deepseek-workspace/kruskal
+# 监听地址/端口只在这里配置一份，ExecStart 展开引用（P1：消灭硬编码与配置漂移）
 Environment=KRUSKAL_HOST=127.0.0.1
 Environment=KRUSKAL_PORT=18080
-ExecStart=/mnt/data_server/home/stu_wr/miniconda3/envs/site/bin/python -m uvicorn app.main:app --app-dir backend --host 127.0.0.1 --port 18080
+# 服务外呼（翻译/一言）一律直连：显式清掉可能继承来的代理
+Environment=http_proxy= https_proxy= all_proxy= HTTP_PROXY= HTTPS_PROXY= ALL_PROXY=
+ExecStart=/bin/sh -c 'exec /mnt/data_server/home/stu_wr/miniconda3/envs/site/bin/python -m uvicorn app.main:app --app-dir backend --host "${KRUSKAL_HOST}" --port "${KRUSKAL_PORT}"'
 Restart=on-failure
+RestartSec=3
 
 [Install]
 WantedBy=multi-user.target

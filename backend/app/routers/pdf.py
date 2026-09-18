@@ -14,9 +14,10 @@ import base64
 import json
 import re
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 
 from ..auth import get_current
+from ..upload import read_upload
 from . import notes as notes_mod
 
 router = APIRouter(prefix="/api/pdf", tags=["pdf"])
@@ -30,6 +31,7 @@ JPEG_QUALITY = 80
 
 @router.post("/import")
 async def import_pdf(
+    request: Request,
     file: UploadFile = File(...),
     folder: str = Form(""),
     _user: dict = Depends(get_current),
@@ -37,11 +39,9 @@ async def import_pdf(
     name = (file.filename or "").strip()
     if not name.lower().endswith(".pdf"):
         raise HTTPException(400, "仅支持 PDF 文件（.pdf）")
-    data = await file.read()
+    data = await read_upload(file, MAX_FILE, request=request, too_big="PDF 文件过大（上限 50MB）")
     if not data:
         raise HTTPException(400, "空文件")
-    if len(data) > MAX_FILE:
-        raise HTTPException(400, "PDF 文件过大（上限 50MB）")
 
     try:
         try:

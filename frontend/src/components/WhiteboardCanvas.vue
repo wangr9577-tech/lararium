@@ -89,6 +89,16 @@
       </div>
 
       <div class="rs" />
+      <div class="rg"><span class="gl">加宽纸面</span>
+        <button class="rb xs" title="本页左右各加 25% 空白，内容保持居中（PPT/PDF 旁写不下时用）"
+          @click="widenPage()"><span>加宽</span></button>
+        <button class="rb xs" title="本页左右各减 25%（空白区已有笔迹时会拒绝）"
+          @click="widenPage(1 / WIDEN_STEP)"><span>收窄</span></button>
+        <button class="rb xs" title="本笔记所有页一起加宽（适合多页 PDF/PPT）"
+          @click="widenAllPages()"><span>全部加宽</span></button>
+      </div>
+
+      <div class="rs" />
       <div class="rg"><span class="gl">纸张</span>
         <div class="grid2">
           <button
@@ -188,8 +198,8 @@ interface PageData {
   strokes: Stroke[]
   images: ImgEl[]
 }
-/** 历史快照：带页号（连续长卷下切页不会串页） */
-interface Hist { idx: number; s: Stroke[]; im: ImgEl[] }
+/** 历史快照：带页号与页宽高（连续长卷下切页、加宽都要能还原） */
+interface Hist { idx: number; s: Stroke[]; im: ImgEl[]; pw?: number; ph?: number }
 
 const RATIOS = {
   v: { label: '竖版', w: 1000, h: 1414 },
@@ -580,6 +590,78 @@ function setRatio(k: RatioKey) {
   layout()
 }
 
+/* ---------------- 纸面左右加宽（给导入的 PPT/PDF 加空白书写区） ---------------- */
+
+const WIDEN_STEP = 1.25   // 每次加宽比例（左右各加 25%）
+const PAGE_W_MIN = 400    // 页宽单位下限
+const PAGE_W_MAX = 8000   // 页宽单位上限（约 8 屏宽）
+
+/** 保持内容尺寸不变，把该页内容等比缩到中间 1/k 并居中（不可变更新，便于撤销）
+ *  返回 false = 收窄时内容已越出中间窗口（空白区写过字），拒绝以免裁掉内容 */
+function remapPageWidth(pg: PageData, k: number): boolean {
+  const half = (k - 1) / (2 * k)      // 新页中内容区的左边界（归一化）
+  if (k < 1) {
+    // 收窄：变换后须仍落在 [0,1] 内 → 等价于变换前 x ∈ [lo, hi]
+    const lo = -half * k
+    const hi = (1 - half) * k
+    const inside = (x: number) => x >= lo - 1e-6 && x <= hi + 1e-6
+    for (const im of pg.images) {
+      if (!inside(im.x) || !inside(im.x + im.w)) return false
+    }
+    for (const s of pg.strokes) {
+      for (const p of s.pts) if (!inside(p.x)) return false
+    }
+  }
+  pg.images = pg.images.map((im) => ({ ...im, x: half + im.x / k, w: im.w / k }))
+  pg.strokes = pg.strokes.map((s) => ({
+    ...s,
+    w: s.w / k,
+    pts: s.pts.map((p) => ({ ...p, x: half + p.x / k })),
+  }))
+  return true
+}
+
+/** 单页加宽/收窄（k>1 加宽，k<1 收窄） */
+function scalePageWidth(pg: PageData, k: number): boolean {
+  const nextW = pg.page.w * k
+  if (nextW < PAGE_W_MIN || nextW > PAGE_W_MAX) return false
+  if (!remapPageWidth(pg, k)) return false
+  pg.page.w = nextW
+  return true
+}
+
+/** 当前页左右加宽（默认 +25%）；k<1 为收窄 */
+function widenPage(k = WIDEN_STEP) {
+  const pg = curPage.value
+  if (!pg) return
+  const up = k > 1
+  pushHist()
+  if (!scalePageWidth(pg, k)) {
+    undoStack.pop() // 未生效：撤回刚压入的快照
+    if (!up) ElMessage.warning('空白区已有笔迹，收窄会裁掉它们；请先擦除后再收窄')
+    else ElMessage.warning('已达纸面宽度上限')
+    return
+  }
+  pushPayload()
+  layout()
+  ElMessage.success(up ? '本页左右已加宽，可在两侧空白处书写' : '本页已收窄')
+}
+
+/** 本笔记所有页一起加宽（PDF/PPT 多页一次搞定）；收窄不提供批量，避免误裁 */
+function widenAllPages(k = WIDEN_STEP) {
+  if (!pages.value.length) return
+  let done = 0
+  for (const pg of pages.value) if (scalePageWidth(pg, k)) done++
+  if (!done) {
+    ElMessage.warning('全部页均已达纸面宽度上限')
+    return
+  }
+  clearHistory() // 多页同时变更，逐页快照难以一致还原
+  pushPayload()
+  layout()
+  ElMessage.success(`已加宽 ${done} 页（其余页已达上限）`)
+}
+
 function addPage() {
   const pg = curPage.value
   const w = pg ? pg.page.w : RATIOS.v.w
@@ -716,7 +798,13 @@ function clearHistory() {
 
 function snap(): Hist {
   const pg = curPage.value
-  return { idx: curIdx.value, s: pg ? pg.strokes.slice() : [], im: pg ? pg.images.map((m) => ({ ...m })) : [] }
+  return {
+    idx: curIdx.value,
+    s: pg ? pg.strokes.slice() : [],
+    im: pg ? pg.images.map((m) => ({ ...m })) : [],
+    pw: pg?.page.w,
+    ph: pg?.page.h,
+  }
 }
 
 function pushHist() {
@@ -741,8 +829,11 @@ function applyHist(h: Hist) {
   }
   pg.strokes = h.s
   pg.images = h.im
+  if (h.pw) pg.page.w = h.pw
+  if (h.ph) pg.page.h = h.ph
   selImg.value = null
   pushPayload()
+  rebuildTops()
   paint(h.idx, true)
 }
 
@@ -1747,13 +1838,14 @@ html.theme-dark .wb-zoom { background: rgba(24, 29, 44, 0.94); }
   position: relative; flex: 1; min-height: 360px;
   max-height: calc(100vh - 150px);
   overflow: auto; overscroll-behavior: contain;
-  /* 手指滑动 = 原生滚动换页；不接管浏览器手势（开启「手指书写」时另见 .touch-draw） */
-  touch-action: pan-y;
+  /* 手指/触控板：横向+纵向都可滚动（加宽/放大后需要左右移动查看空白区）；
+     捏合缩放由 JS 自行处理，故不允许浏览器缩放 */
+  touch-action: pan-x pan-y;
   padding: 12px;
   border-radius: 14px; background: rgba(148, 163, 184, 0.08);
   scrollbar-width: thin;
 }
-.wb-flow::-webkit-scrollbar { width: 10px; }
+.wb-flow::-webkit-scrollbar { width: 10px; height: 10px; }
 .wb-flow::-webkit-scrollbar-thumb {
   background: rgba(148, 163, 184, 0.45); border-radius: 999px;
 }
@@ -1773,9 +1865,9 @@ html.theme-dark .wb-zoom { background: rgba(24, 29, 44, 0.94); }
 .wb.readonly .wb-sheet { box-shadow: 0 4px 18px rgba(30, 20, 80, 0.16); }
 .wb-canvas {
   display: block; border-radius: 8px;
-  /* 关键：画布铺满整页，必须允许纵向触摸滚动，否则手指落在纸面上无法下滑换页
-     （触控笔书写不受 touch-action 影响；开启「手指书写」时由 .touch-draw 接管为 none） */
-  touch-action: pan-y; cursor: crosshair;
+  /* 关键：画布铺满整页，必须允许纵向+横向触摸滚动（否则手指落在纸面上无法下滑/左右移动）
+     触控笔书写不受 touch-action 影响；开启「手指书写」时由 .touch-draw 接管为 none */
+  touch-action: pan-x pan-y; cursor: crosshair;
 }
 .wb.readonly .wb-canvas { cursor: default; }
 .wb-pageno {

@@ -36,11 +36,36 @@ def login(body: LoginIn):
 
 
 def _unlock_vault(password: str) -> None:
-    """用主密码解开 .kek，把 DEK 放入进程 vault；失败视为凭据异常。"""
-    payload = json.loads(config.KEYWRAP_PATH.read_text())
-    dek = crypto.unwrap_keywrap(payload, password)
-    if dek is None:
+    """用主密码解开 .kek，把 DEK 放入进程 vault；失败视为凭据异常。
+
+    P1-H2 崩溃自愈：改密采用"日志提交"——新包裹先写 .kek.journal，DB 更新成功后
+    才 rename 转正。若崩在两步之间（DB=新密码、.kek=旧包裹），旧密码登录会解锁失败，
+    但此时按 DB 已认的新密码能在日志里解开 → 用日志转正 .kek，恢复服务。
+    反之（日志残留但 DB 未提交）主文件直接解开 → 日志视为作废清除。任何时刻都不会锁死。
+    """
+    import os
+    dek = None
+    try:
+        raw = crypto.unwrap_keywrap(json.loads(config.KEYWRAP_PATH.read_text()), password)
+        dek = raw if raw else None  # 空 DEK（bootstrap 空口令包）视同未解锁
+    except (OSError, ValueError):
+        pass  # .kek 缺失/损坏：下面走日志修复，仍失败才 401
+    if not dek and config.KEYWRAP_JOURNAL.is_file():
+        try:
+            raw = crypto.unwrap_keywrap(json.loads(config.KEYWRAP_JOURNAL.read_text()), password)
+            jd = raw if raw else None
+        except ValueError:
+            jd = None
+        if jd:
+            os.replace(config.KEYWRAP_JOURNAL, config.KEYWRAP_PATH)
+            dek = jd
+    if not dek:
         raise HTTPException(status_code=401, detail="数据密钥解锁失败")
+    if config.KEYWRAP_JOURNAL.exists():  # 主文件解开成功而日志仍在 → 改密未提交，作废旧日志
+        try:
+            config.KEYWRAP_JOURNAL.unlink()
+        except OSError:
+            pass
     vault.set_dek(dek)
 
 
@@ -71,22 +96,31 @@ def me(user: dict = Depends(authz.get_current)):
 
 @router.put("/password")
 def change_password(body: PasswordIn, user: dict = Depends(authz.get_current)):
+    import os
     with db() as conn:
         row = conn.execute("SELECT * FROM users WHERE id=?", (user["id"],)).fetchone()
     if row is None or not authz.verify_password(body.old_password, row["salt"], row["pw_hash"]):
         raise HTTPException(status_code=400, detail="旧密码不正确")
-    # 重新包裹数据密钥（数据密钥 DEK 用新密码加密保存）；原子写，改密瞬间最怕撕裂
+    # 重新包裹数据密钥（DEK 不变，仅换加密它的密码）。两阶段：新包裹先落日志，
+    # DB 提交成功后 rename 转正；崩溃窗口由 _unlock_vault 的日志自愈兜住（P1-H2）。
+    dek = None
+    journal = False
     if config.KEYWRAP_PATH.exists():
         try:
             payload = json.loads(config.KEYWRAP_PATH.read_text())
             new_payload = crypto.rewrap_keywrap(payload, body.old_password, body.new_password)
-            vault.atomic_write_bytes(config.KEYWRAP_PATH, json.dumps(new_payload).encode("utf-8"))
-            vault.set_dek(crypto.unwrap_keywrap(payload, body.old_password))  # 保持解锁状态
+            dek = crypto.unwrap_keywrap(payload, body.old_password)  # DEK 不变，保持解锁
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
+        vault.atomic_write_bytes(config.KEYWRAP_JOURNAL, json.dumps(new_payload).encode("utf-8"))
+        journal = True
     salt, h = authz.hash_password(body.new_password)
     with db() as conn:
         conn.execute("UPDATE users SET pw_hash=?, salt=? WHERE id=?", (h, salt, user["id"]))
+    if journal:
+        os.replace(config.KEYWRAP_JOURNAL, config.KEYWRAP_PATH)  # DB 已提交 → 转正
+    if dek is not None:
+        vault.set_dek(dek)
     authz.revoke_all_for(user["id"])  # 令其他会话失效，需重新登录
     try:
         if config.INIT_PW_FILE.exists():

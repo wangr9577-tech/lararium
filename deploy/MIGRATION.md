@@ -6,9 +6,13 @@
 1. **新服务器装基础环境**
    ```bash
    conda create -y -n site python=3.11 pip
+   # 常规安装（跟随 requirements 版本下限）：
    /path/to/miniconda3/envs/site/bin/pip install -i https://pypi.tuna.tsinghua.edu.cn/simple -r backend/requirements.txt
+   # 可选·完全复现现网版本（锁文件由 pip freeze 生成，优先走清华镜像再回落默认源）：
+   # /path/to/miniconda3/envs/site/bin/pip install -i https://pypi.tuna.tsinghua.edu.cn/simple -r backend/requirements.lock.txt
    cd frontend && npm install --registry=https://registry.npmmirror.com && npm run build && cd ..
    ```
+   > 前端新增依赖 `dompurify`（P1-XSS 净化层），node_modules 过期时重新 npm install 即可。
 
 2. **拷数据**（整站代码随仓库走，只多拷数据）
    ```bash
@@ -23,7 +27,8 @@
 3. **启动**
    ```bash
    KRUSKAL_DATA_DIR=/新路径/data bash backend/start.sh
-   # 或直接默认路径启动
+   # 或直接默认路径启动；监听地址端口用 KRUSKAL_HOST / KRUSKAL_PORT 控制（默认 127.0.0.1:18080）
+   # 开发热重载：KRUSKAL_DEV=1 bash backend/start.sh（生产勿开，重载即锁库）
    ```
 
 4. 迁移后可用浏览器验证：登录 → 各页数据是否完整；无需迁移任何加密密钥（.kek 随 data 目录一起走）。

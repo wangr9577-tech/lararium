@@ -26,13 +26,14 @@ from datetime import datetime
 from pathlib import Path
 
 import yaml
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 from .. import config, trashbin, vault
 from ..auth import get_current
 from ..db import db
+from ..upload import read_upload
 
 router = APIRouter(prefix="/api/notes", tags=["notes"])
 
@@ -561,16 +562,14 @@ def delete_note(note_id: str, _user: dict = Depends(get_current)):
 # ---------- 站内图片（粘贴/拖拽上传，AES 加密落盘，需登录读取） ----------
 
 @router.post("/images", status_code=201)
-async def upload_image(file: UploadFile = File(...), _user: dict = Depends(get_current)):
+async def upload_image(request: Request, file: UploadFile = File(...), _user: dict = Depends(get_current)):
     name = (file.filename or "").lower()
     ext = name.rsplit(".", 1)[-1] if "." in name else ""
     if ext not in IMG_EXT:
         raise HTTPException(400, "仅支持 jpg / png / webp / gif 图片（可截图后 Ctrl+V，或拖入图片文件）")
-    raw = await file.read()
+    raw = await read_upload(file, MAX_IMG, request=request, too_big=f"图片超过 20MB 上限（{MAX_IMG // (1 << 20)}MB）")
     if not raw:
         raise HTTPException(400, "文件内容为空")
-    if len(raw) > MAX_IMG:
-        raise HTTPException(400, f"图片 {file.filename} 超过 20MB")
     iid = uuid.uuid4().hex[:12]
     IMAGES_DIR.mkdir(parents=True, exist_ok=True)
     vault.write_bytes(IMAGES_DIR / f"{iid}.{ext}", raw)
@@ -644,7 +643,7 @@ def export_pdf(note_id: str, _user: dict = Depends(get_current)):
         cmd = [
             pandoc, str(src), "-o", str(out),
             "--pdf-engine=xelatex",
-            "-f", "markdown+tex_math_dollars",
+            "-f", "markdown+tex_math_dollars-raw_tex",  # 关掉原始 TeX 透传，防 \input 读任意文件
             "-V", "lang=zh-CN",
             "-V", f"CJKmainfont=Noto Serif CJK SC",
             "-V", "geometry:margin=2.5cm",
@@ -655,7 +654,8 @@ def export_pdf(note_id: str, _user: dict = Depends(get_current)):
         proc = subprocess.run(cmd, capture_output=True, timeout=180, env=env)
         if proc.returncode != 0 or not out.is_file():
             err = (proc.stderr or b"").decode("utf-8", "replace")
-            raise HTTPException(500, f"PDF 渲染失败：{err[-600:]} 请稍后重试（首次编译较慢）")
+            print(f"[export_pdf] pandoc 失败 rc={proc.returncode}：{err[-800:]}", flush=True)
+            raise HTTPException(500, "PDF 渲染失败，请稍后重试（首次编译较慢）")
         return Response(content=out.read_bytes(), media_type="application/pdf")
     except subprocess.TimeoutExpired:
         raise HTTPException(500, "PDF 渲染超时（180s），请稍后重试")

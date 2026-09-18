@@ -158,9 +158,14 @@ async function lock() {
   } catch {
     return // 用户取消
   }
-  try { await http.post('/auth/lock') } catch { /* 接口失败也继续本地清理 */ }
+  let serverLocked = true
+  try { await http.post('/auth/lock') } catch { serverLocked = false }
   clearToken()
-  ElMessage.success('网页已上锁')
+  if (serverLocked) {
+    ElMessage.success('网页已上锁')
+  } else {
+    ElMessage.error('服务端上锁请求失败（密钥可能仍在内存），本机已登出；可稍后再点一次上锁')
+  }
   router.push({ path: '/login', query: { reason: 'lock' } })
 }
 

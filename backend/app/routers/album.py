@@ -18,6 +18,7 @@ from pydantic import BaseModel, Field
 
 from .. import config, trashbin, vault
 from ..auth import get_current
+from ..upload import read_upload
 
 router = APIRouter(prefix="/api/album", tags=["album"])
 
@@ -171,9 +172,7 @@ async def upload_photos(album_id: str, files: list[UploadFile] = File(...),
         ext = name.rsplit(".", 1)[-1] if "." in name else ""
         if ext not in EXT_OK:
             raise HTTPException(400, f"{f.filename} 不是支持的图片（jpg/png/webp/gif）")
-        raw = await f.read()
-        if len(raw) > MAX_PHOTO:
-            raise HTTPException(400, f"{f.filename} 超过 20MB")
+        raw = await read_upload(f, MAX_PHOTO, too_big=f"{f.filename} 超过 20MB 上限")
         pid = uuid.uuid4().hex[:8]
         vault.write_bytes(_album_dir(album_id) / f"{pid}.{ext}", raw)
         items.append({"id": pid, "ext": ext, "added": _now()})

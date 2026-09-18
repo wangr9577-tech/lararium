@@ -5,11 +5,13 @@
 from __future__ import annotations
 
 import logging
+import os
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from . import auth as authz
 from . import config
 from .auth import bootstrap_admin
 from .db import init_db
@@ -32,13 +34,48 @@ from .routers import site as site_router
 from .routers import timeline as timeline_router
 from .routers import translate, vocab as vocab_router
 from .routers import trash as trash_router
+# ---- 科研工作台（P1/P2/P3）----
+from .routers import ai as ai_router
+from .routers import cards as cards_router
+from .routers import experiments as experiments_router
+from .routers import fs as fs_router
+from .routers import ideas as ideas_router
+from .routers import reports as reports_router
+from .routers import submissions as submissions_router
+from .routers import writing as writing_router
 
 logging.basicConfig(level=logging.INFO)
 
 init_db()
 bootstrap_admin()
+authz.sweep_expired()  # 启动清一轮历史过期会话（P1 token 治理）
 
 app = FastAPI(title="Kruskal", version="0.1.0")
+
+# ---- 全局安全网（P1-G2）：/api 一律要求有效 Bearer，白名单除外 ----
+# 路由内的 Depends(get_current) 保留不动：中间件兜住"新路由忘写鉴权"的结构性风险。
+_PUBLIC_API = ("/api/auth/login", "/api/site")  # 2026-09 审计：94 端点仅这两个公开（/share 页不在 /api 下）
+_CSP_ON = os.environ.get("KRUSKAL_CSP", "1") != "0"
+_CSP = ("default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data: blob:; font-src 'self' data:; worker-src 'self' blob:; "
+        "connect-src 'self'; manifest-src 'self'; frame-ancestors 'self'; base-uri 'self'")
+
+
+@app.middleware("http")
+async def auth_and_csp_guard(request: Request, call_next):
+    path = request.url.path
+    if path.startswith("/api/") and not path.startswith(_PUBLIC_API):
+        header = request.headers.get("authorization", "")
+        token = header[7:] if header.startswith("Bearer ") else ""
+        if authz.token_user(token) is None:
+            resp = JSONResponse({"detail": "未登录"}, status_code=401)
+            if _CSP_ON:
+                resp.headers["Content-Security-Policy"] = _CSP
+            return resp
+    response = await call_next(request)
+    if _CSP_ON:
+        response.headers.setdefault("Content-Security-Policy", _CSP)
+    return response
 
 for r in (auth_router.router, settings_router.router, site_router.router,
           translate.router, notes_router.router, focus_router.router,
@@ -46,7 +83,10 @@ for r in (auth_router.router, settings_router.router, site_router.router,
           diary_router.router, holiday_router.router, anniversary_router.router,
           share_router.router, album_router.router, timeline_router.router,
           ledger_router.router, ielts_router.router, ppt_router.router,
-          pdf_router.router, trash_router.router):
+          pdf_router.router, trash_router.router,
+          cards_router.router, ideas_router.router, fs_router.router,
+          ai_router.router, experiments_router.router, writing_router.router,
+          submissions_router.router, reports_router.router):
     app.include_router(r)
 
 

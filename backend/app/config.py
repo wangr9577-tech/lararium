@@ -20,6 +20,7 @@ PORT = int(os.environ.get("KRUSKAL_PORT", "18080"))
 DIST_DIR = REPO_ROOT / "frontend" / "dist"
 DB_PATH = DATA_DIR / "site.db"
 KEYWRAP_PATH = DATA_DIR / ".kek"                # 数据密钥包裹文件（由主密码派生密钥加密）
+KEYWRAP_JOURNAL = DATA_DIR / ".kek.journal"     # 改密两阶段日志：记新包裹，DB 提交成功后才 rename 覆盖
 INIT_PW_FILE = DATA_DIR / "initial_password.txt"
 
 ADMIN_USERNAME = "admin"
@@ -27,7 +28,16 @@ TOKEN_TTL_DAYS = 30
 
 # 内容子目录（正文 md / 资源均存于 DATA_DIR，正文按功能期实现加密）
 # trash = 回收站：删除先进这里，显式永久删除才物理删
-SUBDIRS = ["notes", "diary", "papers", "uploads", "album", "share", "tmp", "holidays", "trash"]
+SUBDIRS = ["notes", "diary", "papers", "uploads", "album", "share", "tmp", "holidays", "trash",
+           "cards", "ideas", "experiments", "writing"]
+
+# 代码工作区白名单根目录（M8）：浏览器里只能看/改这个目录树，防路径穿越
+CODE_ROOT = Path(os.environ.get("KRUSKAL_CODE_ROOT",
+                                "/mnt/data_server/home/stu_wr/deepseek-workspace"))
+# AI 服务（M7）：本地 vLLM（OpenAI 兼容），默认 127.0.0.1 上的 vLLM
+AI_ENDPOINT = os.environ.get("KRUSKAL_AI_ENDPOINT", "http://127.0.0.1:8000/v1")
+AI_MODEL = os.environ.get("KRUSKAL_AI_MODEL", "qwen3.8-27b")
+AI_TIMEOUT = int(os.environ.get("KRUSKAL_AI_TIMEOUT", "120"))
 
 # PDF 导出临时目录（md→PDF 渲染用，用完即清）
 TMP_DIR = DATA_DIR / "tmp"

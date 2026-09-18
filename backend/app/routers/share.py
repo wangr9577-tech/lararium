@@ -112,7 +112,7 @@ def _md_to_html(md_text: str) -> str:
     src = config.TMP_DIR / f"share-{secrets.token_hex(4)}.md"
     try:
         src.write_text(md_text or "", encoding="utf-8")
-        proc = subprocess.run([pandoc, str(src), "-f", "markdown+tex_math_dollars", "-t", "html5"],
+        proc = subprocess.run([pandoc, str(src), "-f", "markdown+tex_math_dollars-raw_tex-raw_html", "-t", "html5"],
                               capture_output=True, timeout=90)
         body = proc.stdout.decode("utf-8", "replace") if proc.returncode == 0 else ""
         if not body.strip():
@@ -268,14 +268,18 @@ def list_shares(_user: dict = Depends(get_current)):
 def revoke_share(token: str, _user: dict = Depends(get_current)):
     if not TOKEN_RE.match(token):
         raise HTTPException(404, "分享不存在")
-    m = _map()
-    if token not in m:
-        raise HTTPException(404, "分享不存在")
-    del m[token]
-    _save_map(m)
+    # 先删快照文件、后删索引：即使中途失败，最坏是"文件没了但索引残留"，
+    # 公开访问仍 404（无文件），且用户在 UI 还能再点一次撤销（幂等）。
+    # 反之若先删索引，删文件失败会留下"索引已删但公开页仍可访问"的撤销不彻底。
     p = SHARE_DIR / f"{token}.html"
     if p.is_file():
-        p.unlink(missing_ok=True)
+        try:
+            p.unlink()
+        except OSError as exc:
+            raise HTTPException(500, "撤销失败：快照文件删除出错，请重试") from exc
+    m = _map()
+    m.pop(token, None)
+    _save_map(m)
     return {"ok": True}
 
 

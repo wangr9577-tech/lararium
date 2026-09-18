@@ -15,9 +15,10 @@ import re
 from io import BytesIO
 from xml.sax.saxutils import escape
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 
 from ..auth import get_current
+from ..upload import read_upload
 from . import notes as notes_mod
 
 router = APIRouter(prefix="/api/ppt", tags=["ppt"])
@@ -295,6 +296,7 @@ def _slide_svg(prs, slide) -> tuple[str, int, int]:
 
 @router.post("/import")
 async def import_ppt(
+    request: Request,
     file: UploadFile = File(...),
     folder: str = Form(""),
     _user: dict = Depends(get_current),
@@ -302,9 +304,7 @@ async def import_ppt(
     name = (file.filename or "").strip()
     if not name.lower().endswith(".pptx"):
         raise HTTPException(400, "仅支持新版 PowerPoint 格式 .pptx（老版 .ppt 不支持，可先在 PowerPoint 另存为 .pptx）")
-    data = await file.read()
-    if len(data) > MAX_FILE:
-        raise HTTPException(400, "PPT 文件过大（上限 50MB）")
+    data = await read_upload(file, MAX_FILE, request=request, too_big="PPT 文件过大（上限 50MB）")
     if not data:
         raise HTTPException(400, "空文件")
 

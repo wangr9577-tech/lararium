@@ -67,15 +67,30 @@ def ensure_keywrap(password: str) -> None:
         vault.atomic_write_bytes(config.KEYWRAP_PATH, json.dumps(payload).encode("utf-8"))
 
 
+MAX_ACTIVE_SESSIONS = 20  # 每用户活跃会话封顶，超出挤掉最旧（P1：token 治理）
+
+
 def issue_token(user_id: int) -> str:
     token = secrets.token_hex(32)
     with db() as conn:
+        conn.execute("DELETE FROM tokens WHERE expires_at <= ?", (now_iso(),))  # 顺手清过期
         conn.execute(
             "INSERT INTO tokens(token, user_id, created_at, expires_at) VALUES(?,?,?,?)",
             (token, user_id, now_iso(),
              (_now() + timedelta(days=config.TOKEN_TTL_DAYS)).strftime("%Y-%m-%d %H:%M:%S")),
         )
+        conn.execute(
+            "DELETE FROM tokens WHERE user_id=? AND token NOT IN "
+            "(SELECT token FROM tokens WHERE user_id=? ORDER BY created_at DESC LIMIT ?)",
+            (user_id, user_id, MAX_ACTIVE_SESSIONS),
+        )
     return token
+
+
+def sweep_expired() -> int:
+    """启动时清一轮历史过期 token，返回删除数。"""
+    with db() as conn:
+        return conn.execute("DELETE FROM tokens WHERE expires_at <= ?", (now_iso(),)).rowcount
 
 
 def revoke_token(token: str) -> None:
@@ -88,16 +103,23 @@ def revoke_all_for(user_id: int) -> None:
         conn.execute("DELETE FROM tokens WHERE user_id=?", (user_id,))
 
 
-def get_current(authorization: str = Header(default="")) -> dict:
-    if not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="未登录")
-    token = authorization[7:]
+def token_user(token: str) -> dict | None:
+    """token → 用户（无效/过期返回 None）。供鉴权依赖与全局中间件共用一份判定。"""
+    if not token:
+        return None
     with db() as conn:
         row = conn.execute(
             "SELECT u.id, u.username FROM tokens t JOIN users u ON u.id = t.user_id "
             "WHERE t.token=? AND t.expires_at > ?",
             (token, now_iso()),
         ).fetchone()
-    if row is None:
+    return {"id": row["id"], "username": row["username"]} if row else None
+
+
+def get_current(authorization: str = Header(default="")) -> dict:
+    if not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="未登录")
+    user = token_user(authorization[7:])
+    if user is None:
         raise HTTPException(status_code=401, detail="登录已过期，请重新登录")
-    return {"id": row["id"], "username": row["username"]}
+    return user
