@@ -140,14 +140,18 @@ interface Stats { balance: number; start_balance: number; total: { income: numbe
 
 const formEl = ref<HTMLDivElement>()
 const pad = (n: number) => String(n).padStart(2, '0')
-const curYm = ref(new Date().toISOString().slice(0, 7))
+// P2-M1：一律用本地时间取日/月。toISOString 是 UTC——东八区每天 00:00–07:59
+// 打开会拿到"昨天"、每月 1 日早晨整页跳上月，与后端本地时间统计对不上。
+const localYmd = (d = new Date()) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+const localYm = () => localYmd().slice(0, 7)
+const curYm = ref(localYm())
 const items = ref<Row[]>([])
 const stats = reactive<Stats>({ balance: 0, start_balance: 0, total: { income: 0, expense: 0 }, month: { ym: '', income: 0, expense: 0, income_count: 0, expense_count: 0, expense_by_category: [], income_by_category: [] }, trend: [] })
 const kind = ref('')
 const scope = ref<'month' | 'all'>('month')
 const sbOpen = ref(false)
 const sbVal = ref(0)
-const form = reactive({ kind: 'expense', date: new Date().toISOString().slice(0, 10), amount: '' as any, category: '', note: '' })
+const form = reactive({ kind: 'expense', date: localYmd(), amount: '' as any, category: '', note: '' })
 const editingId = ref<number | null>(null)
 let allRows: Row[] = []
 
@@ -182,7 +186,7 @@ function moveMonth(d: number) {
   const dt = new Date(y, m - 1 + d, 1)
   curYm.value = `${dt.getFullYear()}-${pad(dt.getMonth() + 1)}`
 }
-function goNow() { curYm.value = new Date().toISOString().slice(0, 7) }
+function goNow() { curYm.value = localYm() }
 
 async function load() {
   try {
@@ -227,7 +231,7 @@ function editRow(r: Row) {
 function resetForm() {
   editingId.value = null
   form.kind = 'expense'
-  form.date = new Date().toISOString().slice(0, 10)
+  form.date = localYmd()
   form.amount = ''
   form.category = ''
   form.note = ''

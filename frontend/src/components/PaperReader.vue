@@ -169,6 +169,12 @@ const editNote = ref('')
 let pending: Hl | null = null
 
 const uid = () => `h${Date.now().toString(36)}${Math.floor(Math.random() * 1e4)}`
+// P2-M1：标注 created 用本地钟面时间（toISOString 是 UTC，早上标注会记成前一天）
+const localStamp = () => {
+  const d = new Date()
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`
+}
 const colorName = (hex: string) => ({ '#fde047': '黄', '#f472b6': '粉', '#86efac': '绿', '#7dd3fc': '蓝', '#c4b5fd': '紫' } as Record<string, string>)[hex] || ''
 
 /* ---------- 高亮读写 ---------- */
@@ -303,7 +309,7 @@ function onDblClick(ev: MouseEvent) {
 
 function addHighlight(c: string) {
   if (!pendingSel) return
-  highlights.value.push({ id: uid(), page: curPage.value, rects: pendingSel.rects, text: pendingSel.text, color: c, note: '', created: new Date().toISOString().slice(0, 19).replace('T', ' '), colorName: colorName(c) })
+  highlights.value.push({ id: uid(), page: curPage.value, rects: pendingSel.rects, text: pendingSel.text, color: c, note: '', created: localStamp(), colorName: colorName(c) })
   bar.show = false
   pendingSel = null
   saveHl()
@@ -463,7 +469,7 @@ onMounted(async () => {
   } catch (e: any) {
     err.value = e?.message || 'PDF 加载失败'
   } finally { loading.value = false }
-  window.addEventListener('resize', () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(onWinResize, 200) })
+  window.addEventListener('resize', onWinResizeDebounced)
   document.addEventListener('mouseup', onDocMouseUp)
   document.addEventListener('pointerup', onDocMouseUp)
   document.addEventListener('mousedown', onDocDown)
@@ -474,11 +480,17 @@ onMounted(async () => {
 function onWinResize() {
   if (viewer && zoomPct.value === 100) viewer.currentScaleValue = 'page-width'
 }
+// P2-M2：防抖处理器必须具名——此前注册匿名函数、卸载却 remove 具名 onWinResize，
+// 引用对不上导致每次打开阅读器都永久泄漏一个 resize 监听器。
+function onWinResizeDebounced() {
+  clearTimeout(resizeTimer)
+  resizeTimer = setTimeout(onWinResize, 200)
+}
 let resizeTimer: ReturnType<typeof setTimeout> | undefined
 
 onBeforeUnmount(() => {
   clearTimeout(resizeTimer)
-  window.removeEventListener('resize', onWinResize)
+  window.removeEventListener('resize', onWinResizeDebounced)
   document.removeEventListener('mouseup', onDocMouseUp)
   document.removeEventListener('pointerup', onDocMouseUp)
   document.removeEventListener('mousedown', onDocDown)

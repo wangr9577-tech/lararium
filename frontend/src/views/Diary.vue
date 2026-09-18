@@ -39,6 +39,7 @@
                 <el-option v-for="w in weathers" :key="w" :label="w" :value="w" />
               </el-select>
               <span class="saved-hint" :class="{ err: !saveOk }">{{ saveHint }}</span>
+              <el-button size="small" @click="trashOpen = true">回收站</el-button>
               <el-button size="small" type="danger" plain @click="clearDay">清空当天</el-button>
             </div>
           </div>
@@ -111,6 +112,8 @@
         <el-button type="primary" :loading="busy" @click="submitForm">保存</el-button>
       </template>
     </el-dialog>
+
+    <TrashDialog v-model="trashOpen" @restored="() => { loadCalendar(); loadEntry() }" />
   </div>
 </template>
 
@@ -119,9 +122,12 @@ import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } 
 import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ArrowLeft, ArrowRight } from '@element-plus/icons-vue'
-import { http } from '../api/client'
+import { http, getToken } from '../api/client'
 import VditorEditor from '../components/VditorEditor.vue'
 import EntryItem, { type Entry } from '../components/EntryItem.vue'
+import TrashDialog from '../components/TrashDialog.vue'
+
+const trashOpen = ref(false) // P2-L1：日记删除进回收站，本页直接可恢复
 
 const route = useRoute()
 
@@ -346,7 +352,7 @@ async function clearDay() {
     form.mood = ''
     form.weather = ''
     saveHint.value = '空'
-    ElMessage.success('已清空')
+    ElMessage.success('已移入回收站，可在「回收站」恢复')
     await nextTick()
     suppressContentWatch = false
   } catch (e: any) {
@@ -366,7 +372,21 @@ watch([curYear, curMonth], () => {
   // 不在当前月则不自动跳，只刷新月列表
 })
 
+// P2-M3：直接关标签/切后台时 axios 异步请求会被掐——对齐 NoteEdit，
+// 用 fetch keepalive 把当天未落盘的日记尽力补发一次（浏览器允许 ≤64KB 同步排队）。
+function onPageHide() {
+  clearTimeout(saveTimer)
+  if (!dirty || loadingEntry) return
+  fetch(`/api/diary/${selDate.value}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${getToken()}` },
+    body: JSON.stringify({ ...form }),
+    keepalive: true,
+  }).catch(() => { /* 关页阶段无法再提示 */ })
+}
+
 onMounted(() => {
+  window.addEventListener('pagehide', onPageHide)
   const qd = typeof route.query.date === 'string' ? route.query.date : ''
   if (/^\d{4}-\d{2}-\d{2}$/.test(qd)) {
     selDate.value = qd
@@ -379,6 +399,7 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  window.removeEventListener('pagehide', onPageHide)
   clearTimeout(saveTimer)
   if (dirty) doSave().catch(() => {})
 })

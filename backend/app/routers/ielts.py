@@ -74,16 +74,31 @@ def _row(r) -> dict:
             "done": bool(r["done"]), "created": r["created_at"]}
 
 
+_SEED_FLAG = "ielts.seeded"
+
+
 def _ensure_seed(conn) -> None:
-    """表空时播种预设（幂等，只影响全新的 ielts_items 表）。"""
+    """仅真正的首次安装播种预设。
+
+    用 settings 表标记判断"是否已初始化过"，而非看表空不空——
+    否则用户手动删光词库后，下次访问会被预设"复活"（P2 修复）。
+    存量部署（已有数据但无标记）首次遇到时补写标记，之后不再播种。
+    """
+    flagged = conn.execute("SELECT value FROM settings WHERE key=?", (_SEED_FLAG,)).fetchone()
+    if flagged is not None:
+        return
     n = conn.execute("SELECT COUNT(*) AS c FROM ielts_items").fetchone()["c"]
-    if n:
+    if n:  # 老数据补标记，不播种
+        conn.execute("INSERT INTO settings(key, value) VALUES(?, '1') "
+                     "ON CONFLICT(key) DO NOTHING", (_SEED_FLAG,))
         return
     rows = [(sec, t, _now()) for sec, texts in SEED.items() for t in texts]
     conn.executemany(
         "INSERT INTO ielts_items(section, text, sort, created_at) VALUES(?,?,0,?)",
         rows,
     )
+    conn.execute("INSERT INTO settings(key, value) VALUES(?, '1') "
+                 "ON CONFLICT(key) DO NOTHING", (_SEED_FLAG,))
 
 
 class ItemIn(BaseModel):

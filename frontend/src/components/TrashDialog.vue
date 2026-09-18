@@ -1,6 +1,6 @@
 <template>
   <el-dialog v-model="open" title="回收站" width="640px" append-to-body>
-    <div class="trash-tip">删除的笔记 / 相册 / 论文先进回收站（随数据加密存储），可随时恢复；「永久删除」后不可恢复。</div>
+    <div class="trash-tip">删除的笔记 / 相册 / 论文 / 日记先进回收站（随数据加密存储），可随时恢复；「永久删除」后不可恢复。</div>
     <el-empty v-if="!items.length && !loading" description="回收站是空的" :image-size="64" />
     <div v-loading="loading" class="tlist">
       <div v-for="it in items" :key="it.tid" class="titem">
@@ -25,7 +25,7 @@ import { ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { api, http } from '../api/client'
 
-const MODULE_NAMES: Record<string, string> = { note: '笔记', album: '相册', paper: '论文' }
+const MODULE_NAMES: Record<string, string> = { note: '笔记', album: '相册', paper: '论文', diary: '日记' }
 
 interface TrashItem {
   tid: string

@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import os
 import sqlite3
 import threading
 from contextlib import contextmanager
@@ -279,3 +280,12 @@ def init_db() -> None:
             conn.execute(
                 "CREATE UNIQUE INDEX idx_notes_folders_mp ON notes_folders(module, path)"
             )
+    # P2-L5：文件级双保险——数据目录已是 700，库文件与 WAL 附属再收紧为仅属主可读写。
+    # 放在 init_db 尾部随每次启动幂等执行（WAL 附属文件重建后的默认权限也会被拧回来）。
+    for suffix in ("", "-wal", "-shm"):
+        try:
+            p = config.DB_PATH.with_name(config.DB_PATH.name + suffix)
+            if p.is_file():
+                os.chmod(p, 0o600)
+        except OSError:
+            pass  # NFS 等场景 chmod 被拒不致命，目录 700 仍是第一道闸

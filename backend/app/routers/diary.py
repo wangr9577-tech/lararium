@@ -18,7 +18,7 @@ import yaml
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
-from .. import config, vault
+from .. import config, trashbin, vault
 from ..auth import get_current
 
 router = APIRouter(prefix="/api/diary", tags=["diary"])
@@ -106,6 +106,8 @@ def delete_diary(date: str, _user: dict = Depends(get_current)):
     if not DATE_RE.match(date):
         raise HTTPException(400, "date 应为 YYYY-MM-DD")
     p = _path(date)
+    tid = None
     if p.is_file():
-        p.unlink()
-    return {"ok": True}
+        # 移入回收站而非物理删（P2-L1）：与笔记/相册/论文一致，误删可恢复
+        tid = trashbin.move_to_trash([p], module="diary", label=f"日记 {date}")
+    return {"ok": True, "trash_id": tid}

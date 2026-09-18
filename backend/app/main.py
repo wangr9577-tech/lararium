@@ -50,7 +50,14 @@ init_db()
 bootstrap_admin()
 authz.sweep_expired()  # 启动清一轮历史过期会话（P1 token 治理）
 
-app = FastAPI(title="Kruskal", version="0.1.0")
+# P2-L4：生产不公开 OpenAPI 接口结构（摸接口面变小）；KRUSKAL_DEV=1 才开 /docs
+_IS_DEV = os.environ.get("KRUSKAL_DEV") == "1"
+app = FastAPI(
+    title="Kruskal", version="0.1.0",
+    docs_url="/docs" if _IS_DEV else None,
+    redoc_url="/redoc" if _IS_DEV else None,
+    openapi_url="/openapi.json" if _IS_DEV else None,
+)
 
 # ---- 全局安全网（P1-G2）：/api 一律要求有效 Bearer，白名单除外 ----
 # 路由内的 Depends(get_current) 保留不动：中间件兜住"新路由忘写鉴权"的结构性风险。

@@ -2,8 +2,9 @@
 from __future__ import annotations
 
 import json
+import time
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from .. import auth as authz
@@ -11,6 +12,35 @@ from .. import config, crypto, vault
 from ..db import db
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
+
+# ---- 登录防爆破（P2-L3）：单进程内存滑窗，10 分钟内同 IP 或同用户名
+# 累计失败 10 次即 429 冷却；成功清零。进程重启自然复位，个人站够用。 ----
+_FAIL_WINDOW = 600.0
+_FAIL_MAX = 10
+_login_fails: dict[str, list[float]] = {}
+
+
+def _window_hits(key: str) -> int:
+    now = time.monotonic()
+    hits = [t for t in _login_fails.get(key, ()) if now - t < _FAIL_WINDOW]
+    if hits:
+        _login_fails[key] = hits
+    else:
+        _login_fails.pop(key, None)
+    return len(hits)
+
+
+def _note_fail(keys: list[str]) -> None:
+    if len(_login_fails) > 2048:  # 防随机用户名撑爆内存
+        _login_fails.clear()
+    now = time.monotonic()
+    for k in keys:
+        _login_fails.setdefault(k, []).append(now)
+
+
+def _clear_fails(keys: list[str]) -> None:
+    for k in keys:
+        _login_fails.pop(k, None)
 
 
 class LoginIn(BaseModel):
@@ -24,11 +54,17 @@ class PasswordIn(BaseModel):
 
 
 @router.post("/login")
-def login(body: LoginIn):
+def login(body: LoginIn, request: Request):
+    ip = request.client.host if request.client else "unknown"
+    keys = [f"ip:{ip}", f"user:{body.username}"]
+    if any(_window_hits(k) >= _FAIL_MAX for k in keys):
+        raise HTTPException(status_code=429, detail="失败次数过多，请 10 分钟后再试")
     with db() as conn:
         row = conn.execute("SELECT * FROM users WHERE username=?", (body.username,)).fetchone()
     if row is None or not authz.verify_password(body.password, row["salt"], row["pw_hash"]):
+        _note_fail(keys)
         raise HTTPException(status_code=401, detail="账号或密码错误")
+    _clear_fails(keys)
     authz.ensure_keywrap(body.password)
     _unlock_vault(body.password)  # 登录即解锁数据密钥，正文读写可用
     token = authz.issue_token(row["id"])
