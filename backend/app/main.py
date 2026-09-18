@@ -64,7 +64,7 @@ _CSP = ("default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'se
 @app.middleware("http")
 async def auth_and_csp_guard(request: Request, call_next):
     path = request.url.path
-    if path.startswith("/api/") and not path.startswith(_PUBLIC_API):
+    if path.startswith("/api/") and not any(path == p or path.startswith(p + "/") for p in _PUBLIC_API):
         header = request.headers.get("authorization", "")
         token = header[7:] if header.startswith("Bearer ") else ""
         if authz.token_user(token) is None:
