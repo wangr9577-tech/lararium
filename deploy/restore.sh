@@ -39,7 +39,10 @@ fi
 
 # 3) 解包到 staging，校验成员结构（backup.sh 约定成员为 data/...）
 tar -tzf "$TARBALL" >/dev/null
-tar -tzf "$TARBALL" | head -1 | grep -q '^data/' || { echo "[restore] 归档结构异常（顶层不是 data/），中止" >&2; exit 1; }
+# 注意：set -o pipefail 下 `tar|head|grep` 会因 head 提前关管道让 tar 吃 SIGPIPE(141) 而整链判非零——
+# 曾导致一切合法备份都被误判"结构异常"。先单独取首行再判前缀。
+top="$(tar -tzf "$TARBALL" | head -n1 || true)"
+[ "${top#data/}" != "$top" ] || { echo "[restore] 归档结构异常（顶层不是 data/），中止" >&2; exit 1; }
 tar -xzf "$TARBALL" -C "$WORK"
 
 # 4) 停服检查
