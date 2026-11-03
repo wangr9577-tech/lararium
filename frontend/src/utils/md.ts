@@ -21,10 +21,16 @@ function purify(html: string): string {
   return DOMPurify.sanitize(html, { ADD_TAGS: ['use'], RETURN_TRUSTED_TYPE: false })
 }
 
+// html:false 会把 <br> 转义成纯文本，但 Vditor 编辑器在表格单元格内按 Enter 换行时，
+// 会把单元格内容存成 <br />；若直接转义，阅读页会显示成字面的 "1<br />"，即换行丢失。
+// 这里仅把「已被转义出来的 br」还原回真正的 <br> 标签（只此一个标签，不放行其它 HTML），
+// 再交给 DOMPurify 兜底（<br> 在白名单内无害），html:false 的单点信任姿势保持不变。
+const BR_ESCAPED = /&lt;br\s*\/?&gt;/gi
+
 /** Markdown → HTML（含 KaTeX 公式，经 DOMPurify 净化） */
 export function renderMd(src: string): string {
   try {
-    return purify(md.render(src || ''))
+    return purify(md.render(src || '').replace(BR_ESCAPED, '<br>'))
   } catch {
     try {
       return purify(md.render('*(渲染出错)*'))

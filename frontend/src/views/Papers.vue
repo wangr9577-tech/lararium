@@ -67,7 +67,7 @@
         <div class="pc-top">
           <span class="pc-title">{{ p.title }}</span>
           <el-select v-model="p.status" size="small" style="width: 92px" @change="(v: string) => setStatus(p, v)" @click.stop>
-            <el-option v-for="s in ['想读', '在读', '读完']" :key="s" :label="s" :value="s" />
+            <el-option v-for="s in ['想读', '在读', '精读', '读完', '搁置']" :key="s" :label="s" :value="s" />
           </el-select>
         </div>
         <div class="pc-sub">
@@ -86,7 +86,9 @@
         <div v-if="p.note" class="pc-note">{{ p.note }}</div>
         <div class="pc-foot">
           <span class="time">{{ p.updated }}</span>
-          <el-button size="small" type="danger" plain @click.stop="remove(p)">删除</el-button>
+          <div class="pc-ops">
+            <el-button size="small" type="danger" plain @click.stop="remove(p)">删除</el-button>
+          </div>
         </div>
       </div>
     </div>
@@ -170,7 +172,8 @@ const pending = ref<Picked[]>([])
 
 const statusFilters = [
   { value: '', label: '全部' }, { value: '想读', label: '想读' },
-  { value: '在读', label: '在读' }, { value: '读完', label: '读完' },
+  { value: '在读', label: '在读' }, { value: '精读', label: '精读' },
+  { value: '读完', label: '读完' }, { value: '搁置', label: '搁置' },
 ]
 const filtered = computed(() => papers.value.filter((p) => (
   (!status.value || p.status === status.value) &&
@@ -310,6 +313,7 @@ onMounted(() => { load(); loadCategories() })
 .pg { margin-left: auto; }
 .pc-note { color: var(--txt3); font-size: 12.5px; margin-bottom: 6px; }
 .pc-foot { display: flex; align-items: center; justify-content: space-between; border-top: 1px dashed rgba(148, 163, 184, 0.25); padding-top: 8px; }
+.pc-ops { display: flex; gap: 6px; }
 .time { font-size: 11px; color: var(--txt2); }
 
 .mg-rows { display: grid; gap: 10px; }

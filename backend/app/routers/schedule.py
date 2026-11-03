@@ -103,7 +103,8 @@ def schedule_heatmap(year: int | None = None, _user: dict = Depends(get_current)
     with db() as conn:
         rows = conn.execute(
             "SELECT date, SUM(done) AS d, COUNT(*) AS c FROM schedule "
-            "WHERE kind='daily' AND substr(date,1,4)=? GROUP BY date", (str(year),)).fetchall()
+            "WHERE kind='daily' AND type IN ('task','ddl') AND substr(date,1,4)=? GROUP BY date",
+            (str(year),)).fetchall()
     days = {r["date"]: {"done": r["d"], "total": r["c"]} for r in rows}
     return {"year": year, "days": days}
 
@@ -134,6 +135,10 @@ def update_entry(entry_id: int, body: EntryIn, _user: dict = Depends(get_current
             (body.date, body.kind, body.type, body.title.strip(), body.time_start.strip(),
              body.note.strip(), entry_id),
         )
+        try:
+            conn.execute("UPDATE assistant_schedule_links SET locked_by_user=1 WHERE schedule_id=?", (entry_id,))
+        except Exception:
+            pass
         row = conn.execute("SELECT * FROM schedule WHERE id=?", (entry_id,)).fetchone()
     return _row(row)
 
@@ -145,6 +150,10 @@ def toggle_done(entry_id: int, body: DoneIn, _user: dict = Depends(get_current))
         if row is None:
             raise HTTPException(404, "条目不存在")
         conn.execute("UPDATE schedule SET done=? WHERE id=?", (1 if body.done else 0, entry_id))
+        try:
+            conn.execute("UPDATE assistant_schedule_links SET locked_by_user=1 WHERE schedule_id=?", (entry_id,))
+        except Exception:
+            pass
         row = conn.execute("SELECT * FROM schedule WHERE id=?", (entry_id,)).fetchone()
     return _row(row)
 
@@ -152,6 +161,11 @@ def toggle_done(entry_id: int, body: DoneIn, _user: dict = Depends(get_current))
 @router.delete("/{entry_id}")
 def delete_entry(entry_id: int, _user: dict = Depends(get_current)):
     with db() as conn:
+        try:
+            # 必须在删除 schedule 之前显式将关联记录标记为用户已移除，并将 schedule_id 置 NULL，防外键级联丢失标记
+            conn.execute("UPDATE assistant_schedule_links SET user_dismissed=1, schedule_id=NULL WHERE schedule_id=?", (entry_id,))
+        except Exception:
+            pass
         cur = conn.execute("DELETE FROM schedule WHERE id=?", (entry_id,))
     if cur.rowcount == 0:
         raise HTTPException(404, "条目不存在")

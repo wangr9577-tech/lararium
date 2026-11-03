@@ -8,9 +8,9 @@
         <el-icon color="#8b5cf6"><CircleCheckFilled /></el-icon><span>{{ f }}</span>
       </div>
     </div>
-    <div class="note">
+    <div v-if="note" class="note">
       <el-icon :size="13"><InfoFilled /></el-icon>
-      <span>接口已就绪 · 功能将在对应开发期接通（见 README 路线图）</span>
+      <span>{{ note }}</span>
     </div>
     <slot />
   </div>
@@ -24,8 +24,8 @@ import {
 } from '@element-plus/icons-vue'
 
 const props = withDefaults(
-  defineProps<{ icon: string; title: string; desc: string; features?: string[] }>(),
-  { features: () => [] },
+  defineProps<{ icon: string; title: string; desc: string; features?: string[]; note?: string }>(),
+  { features: () => [], note: '' },
 )
 
 const iconMap: Record<string, IconComponent> = {

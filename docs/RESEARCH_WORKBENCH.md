@@ -297,7 +297,7 @@ API：`/api/submissions` CRUD；`GET /api/reports/weekly`
 
 ### 7.1 功能
 - **文件树浏览**：白名单根目录（`config.py` 新增 `CODE_ROOT`，默认
-  `/mnt/data_server/home/stu_wr/deepseek-workspace`），隐藏 `.git`/`node_modules`/`__pycache__`，
+  `~/workspace`），隐藏 `.git`/`node_modules`/`__pycache__`，
   深度/条目限制防爆列表
 - **在线编辑**：CodeMirror + `@codemirror/lang-python`（轻量，与现有编辑器体系一致；
   **不上 Monaco**——包大且刷新体验重）
@@ -363,7 +363,7 @@ API：`/api/submissions` CRUD；`GET /api/reports/weekly`
 
 ### 8.3 PDF 文本抽取（依赖变更）
 ```bash
-/mnt/data_server/home/stu_wr/miniconda3/envs/site/bin/pip install -i https://pypi.tuna.tsinghua.edu.cn/simple pymupdf
+pip install -i https://pypi.tuna.tsinghua.edu.cn/simple pymupdf
 ```
 扫描版 PDF（无文本层）→ 返回 `text_available=false`，前端提示无法摘要。
 

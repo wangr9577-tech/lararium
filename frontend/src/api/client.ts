@@ -38,6 +38,7 @@ export const http = {
   get: <T = any>(url: string) => api.get<T>(url).then((r) => r.data),
   post: <T = any>(url: string, data?: any) => api.post<T>(url, data).then((r) => r.data),
   put: <T = any>(url: string, data?: any) => api.put<T>(url, data).then((r) => r.data),
+  patch: <T = any>(url: string, data?: any) => api.patch<T>(url, data).then((r) => r.data),
   del: <T = any>(url: string) => api.delete<T>(url).then((r) => r.data),
   /** 下载二进制（如导出的 PDF） */
   blob: (url: string) => api.get(url, { responseType: 'blob', timeout: 240000 }).then((r) => r.data as Blob),

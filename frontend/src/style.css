@@ -271,6 +271,39 @@ html:not(.theme-dark) .el-popper.is-light {
 }
 html:not(.theme-dark) .el-picker-panel { background: transparent; }
 
+/* ============ 页面内嵌控件暗色适配（非弹层） ============
+   站点主题用 html.theme-dark，Element 暗黑 css 不生效（仅 html.dark），
+   弹层已在上方覆写；这里补页面内嵌的 date-picker / select / input /
+   textarea / radio，避免深灰文字压在暗紫玻璃上看不清。 */
+html.theme-dark .el-date-editor.el-input__wrapper,
+html.theme-dark .el-select__wrapper,
+html.theme-dark .el-input__wrapper,
+html.theme-dark .el-textarea__inner {
+  background: rgba(24, 29, 44, 0.55);
+  box-shadow: 0 0 0 1px rgba(148, 163, 184, 0.28) inset;
+}
+html.theme-dark .el-date-editor.el-input__wrapper.is-focus,
+html.theme-dark .el-select__wrapper.is-focused,
+html.theme-dark .el-input__wrapper.is-focus,
+html.theme-dark .el-textarea__inner:focus {
+  box-shadow: 0 0 0 1px var(--acc2) inset;
+}
+html.theme-dark .el-date-editor .el-input__inner,
+html.theme-dark .el-select__selected-item,
+html.theme-dark .el-input__inner,
+html.theme-dark .el-textarea__inner { color: #e6ecf7; }
+html.theme-dark .el-date-editor .el-input__inner::placeholder,
+html.theme-dark .el-input__inner::placeholder,
+html.theme-dark .el-textarea__inner::placeholder,
+html.theme-dark .el-select__placeholder { color: #8b97ab; }
+html.theme-dark .el-select__caret,
+html.theme-dark .el-date-editor .el-input__prefix,
+html.theme-dark .el-date-editor .el-input__suffix,
+html.theme-dark .el-input__prefix,
+html.theme-dark .el-input__suffix { color: #9aa8c6; }
+html.theme-dark .el-radio-button__inner { color: #c8d2e4; background: rgba(30, 41, 59, 0.35); }
+html.theme-dark .el-radio-button.is-active .el-radio-button__inner { color: #fff; background: var(--acc2); }
+
 /* ============ MarkdownEditor 暗黑主题适配（CodeMirror + 工具栏） ============ */
 .mde .cm-editor { background: transparent; }
 .mde .cm-editor .cm-content { color: #2b3442; caret-color: #2b3442; }
@@ -282,3 +315,44 @@ html.theme-dark .mde .cm-editor .cm-activeLine { background: rgba(167, 139, 250,
 html.theme-dark .mde .cm-editor .cm-cursor { border-left-color: #eef2fb !important; }
 html.theme-dark .mde .tb-btn { color: #d7e0ef !important; }
 html.theme-dark .mde .tb-btn:hover { color: #c4b5fd !important; }
+
+/* ---------- 打印（阅读页 Ctrl+P 得到干净的论文式版面） ---------- */
+/* 原因：AppShell 是 .shell{height:100vh;overflow:hidden} + .content{overflow-y:auto} 的固定高度布局，
+   直接打印只能输出内部滚动视口，且会带出侧栏/顶栏/按钮；此处解除嵌套滚动、隐藏装饰元素 */
+@media print {
+  html, body, #app { height: auto !important; overflow: visible !important; background: #fff !important; }
+  .shell { display: block !important; height: auto !important; overflow: visible !important; }
+  .side, .top, .mask, .drop-mask { display: none !important; }
+  .main { display: block !important; }
+  .content { overflow: visible !important; height: auto !important; flex: none !important; }
+  .page { max-width: none !important; padding: 0 !important; }
+  .read-progress, .to-top, .toc, .ops, .subpanel, .pn, .wb { display: none !important; }
+  .article { padding: 0 !important; box-shadow: none !important; border: none !important; background: #fff !important; }
+  .article .markdown-body, html.theme-dark .article .markdown-body { color: #111 !important; font-size: 12pt; line-height: 1.75; }
+  .article .markdown-body a { color: #111 !important; text-decoration: none !important; border-bottom: none !important; }
+  .article .markdown-body pre { background: #f5f5f5 !important; color: #111 !important; border: 1px solid #ddd; }
+  .article .markdown-body pre code { background: transparent !important; color: #111 !important; }
+  .article .markdown-body code { background: #f2f2f2 !important; color: #111 !important; }
+  .article .markdown-body blockquote { background: #fafafa !important; color: #333 !important; }
+  .article .markdown-body th { background: #f2f2f2 !important; }
+  .article .markdown-body img { max-width: 100% !important; }
+  @page { margin: 16mm; }
+}
+
+
+/* ============ 可访问性增强与动画 ============ */
+a:focus-visible, button:focus-visible, input:focus-visible, textarea:focus-visible, [tabindex]:focus-visible {
+  outline: 2px solid var(--acc2);
+  outline-offset: 2px;
+}
+.fade-enter-active, .fade-leave-active {
+  transition: opacity .3s cubic-bezier(.22, 1, .36, 1);
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    scroll-behavior: auto !important;
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+  }
+}

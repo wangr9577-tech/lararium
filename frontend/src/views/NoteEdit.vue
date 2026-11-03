@@ -16,7 +16,16 @@
     </div>
 
     <WhiteboardCanvas v-if="form.fmt === 'ink'" ref="wbRef" v-model="form.content" />
-    <MarkdownEditor v-else v-model="form.content" :exclude-id="id" @save="doSave" />
+    <template v-else>
+      <!-- 博客/笔记（文本）：复用日记的 Vditor 即时渲染（Typora 式不分屏，标题/加粗/公式/表格边打边呈现） -->
+      <div class="md-toolbar">
+        <el-button size="small" text @click="refOpen = true">
+          <el-icon style="margin-right:4px"><Connection /></el-icon>引用文章
+        </el-button>
+        <span class="md-toolbar-hint">Markdown 即时渲染：# 标题 / **加粗** / $公式$ / 表格边打边出效果 · 截图 Ctrl+V 或拖入图片自动上传</span>
+      </div>
+      <VditorEditor ref="vdRef" v-model="form.content" :min-height="560" @save="doSave" />
+    </template>
 
     <div class="foot">
       <el-button v-if="form.fmt === 'ink'" @click="exportPng">导出 PNG</el-button>
@@ -25,6 +34,25 @@
         <el-icon style="margin-right:4px"><Check /></el-icon>{{ isNew ? '创建' : '保存修改' }}
       </el-button>
     </div>
+
+    <!-- 引用其它文章：选一篇，在光标处插入站内链接 [标题](/notes/id)（有选中文字则包裹为链接文字） -->
+    <el-dialog v-model="refOpen" title="引用其它文章" width="560px" @open="onRefOpen">
+      <div class="mde-rf-tip">选择一篇文章，将在光标处插入站内引用链接（或包裹当前选中文字），阅读时点击即可跳转</div>
+      <el-input v-model="refQ" placeholder="搜索标题 / 摘要 / 标签…" clearable>
+        <template #prefix><el-icon><Search /></el-icon></template>
+      </el-input>
+      <div class="mde-rf-list">
+        <button v-for="n in refList" :key="n.id" type="button" class="mde-rf-item" @click="pickRef(n)">
+          <span class="mde-rf-type">{{ typeLabel(n.type) }}</span>
+          <span class="mde-rf-title">{{ n.title }}</span>
+          <span v-if="n.summary" class="mde-rf-sum">{{ n.summary }}</span>
+        </button>
+        <div v-if="!refList.length" class="mde-rf-empty">没有可引用的文章（已排除当前这篇）</div>
+      </div>
+      <template #footer>
+        <el-button @click="refOpen = false">取消</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -32,9 +60,11 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { ArrowLeft, Check, FullScreen } from '@element-plus/icons-vue'
+import { ArrowLeft, Check, Connection, FullScreen, Search } from '@element-plus/icons-vue'
 import { getToken, http } from '../api/client'
-import MarkdownEditor from '../components/MarkdownEditor.vue'
+import { workbenchApi } from '../api/workbench'
+import { assistantApi } from '../api/assistant'
+import VditorEditor from '../components/VditorEditor.vue'
 import WhiteboardCanvas from '../components/WhiteboardCanvas.vue'
 
 const AUTO_SAVE_MS = 5 * 60 * 1000 // 每 5 分钟自动保存
@@ -69,6 +99,22 @@ const wbRef = ref<InstanceType<typeof WhiteboardCanvas> | null>(null)
 const autoId = ref('')
 /** 最近一次成功保存时间（HH:MM:SS），顶栏展示 */
 const lastSavedAt = ref('')
+/** 工作台来源事项 id（/notes/new?source_item_id=<id>）：首次建档成功后自动关联一次 */
+const sourceItemId = String(route.query.source_item_id || '')
+/** 助手来源记录 id（/notes/new?source_record_id=<id>）：初始化拉取草稿，首次建档成功后自动关联 */
+const sourceRecordId = String(route.query.source_record_id || '')
+/** 已为该笔记建立过关联的笔记 id（按 id 记忆，保证「只关联一次」而不误伤用户手动移除） */
+const linkedFor = ref('')
+const linkedRecordFor = ref('')
+
+/** 来源查询参数：带来源时透传，返回/转阅读页都不丢来源（避免空 query 键） */
+function sourceQ(): Record<string, string> {
+  const q: Record<string, string> = {}
+  if (sourceItemId) q.source_item_id = sourceItemId
+  if (sourceRecordId) q.source_record_id = sourceRecordId
+  return q
+}
+
 /** 最近一次成功保存时的字段快照，用于判定「是否有改动」 */
 const saved = reactive({ title: '', type: 'blog', fmt: 'md', folder: '', parent: '', summary: '', content: '', tagsKey: '' })
 let timer: ReturnType<typeof setInterval> | undefined
@@ -175,6 +221,97 @@ function exportPng() {
   ElMessage.success('已导出 PNG 图片')
 }
 
+/* ---------------- 引用其它文章（站内链接 [标题](/notes/id)，光标处插入） ---------------- */
+
+/** Vditor 编辑器实例（引用文章对话框用它 insertMD 插入 / getSelectionText 取选中文字） */
+const vdRef = ref<InstanceType<typeof VditorEditor> | null>(null)
+
+interface RefNote { id: string; title: string; type: string; summary: string; tags: string[] }
+
+const refOpen = ref(false)
+const refQ = ref('')
+const refCandidates = ref<RefNote[]>([])
+
+const refList = computed(() => {
+  const q = refQ.value.trim().toLowerCase()
+  return refCandidates.value.filter((n) => {
+    if (id.value && n.id === id.value) return false // 不引用自己
+    if (!q) return true
+    return `${n.title} ${n.summary} ${n.tags.join(' ')}`.toLowerCase().includes(q)
+  })
+})
+
+function typeLabel(t: string) {
+  return ({ blog: '博客', note: '学习笔记', project: '项目经历' } as Record<string, string>)[t] || t
+}
+
+/** 打开引用面板时按需加载文章列表（默认列表：普通博客/笔记，不含雅思子页） */
+async function onRefOpen() {
+  if (refCandidates.value.length) return
+  try {
+    const r = await http.get<{ items: RefNote[] }>('/notes?module=')
+    refCandidates.value = r.items || []
+  } catch { /* 401/423 忽略 */ }
+}
+
+/** 选中文章：光标处插入 [文字](/notes/id)；有选中文字则用选中文字（insertMD 会先删除选中） */
+function pickRef(n: RefNote) {
+  if (!vdRef.value) return
+  const sel = (vdRef.value.getSelectionText() || '').trim()
+  // 链接文字防破坏 Markdown 语法：去掉方括号/圆括号
+  const text = sel.replace(/[[\]()]/g, '') || n.title || '文章'
+  vdRef.value.insertMD(`[${text}](/notes/${n.id})`)
+  refOpen.value = false
+}
+
+/* ---------------- 工作台来源事项：建档后自动加入「相关资料」 ---------------- */
+
+/** 首次创建成功后把笔记链接到来源事项；幂等（后端 UNIQUE + INSERT OR IGNORE），
+ *  失败只提示可重试，绝不误报成功、绝不阻塞保存流程。
+ *  retry=true 为重试路径：跳过「是否已关联」查询，直接再试一次（最多重试一次，避免连环弹窗）。 */
+async function linkSourceItem(noteId: string, retry = false) {
+  if (!sourceItemId || !noteId) return
+  if (linkedFor.value === noteId) return // 这条笔记本次已关联过：自动保存与手动保存抢跑也只关联一次
+  const sid = Number(sourceItemId)
+  if (!Number.isInteger(sid) || sid <= 0) return
+  try {
+    if (!retry) {
+      // 先查状态：用户可能已手动移除过关联，移除后不再自动重建
+      const st = await workbenchApi.noteLinkStatus(sid, noteId)
+      if (st?.linked) { linkedFor.value = noteId; return }
+    }
+    await workbenchApi.addLink(sid, 'note', noteId)
+    linkedFor.value = noteId
+    ElMessage.success('已加入来源事项的相关资料')
+  } catch {
+    // 失败不设 linkedFor：之后任意一次保存都会自动重试；也不抛出，保证笔记保存/跳转不被阻塞
+    ElMessage.warning({
+      message: '笔记已保存，但加入来源事项的相关资料失败，可在事项里重新关联',
+      duration: 6000,
+    })
+    if (retry) return // 已重试过一次，不再连环提示
+    try {
+      await ElMessageBox.confirm('要重试关联吗？', '关联失败', {
+        confirmButtonText: '重试', cancelButtonText: '稍后再说', type: 'warning',
+      })
+    } catch { return }
+    await linkSourceItem(noteId, true)
+  }
+}
+
+/** 首次创建成功后把笔记关联到来源助手记录（幂等） */
+async function linkSourceRecord(noteId: string) {
+  if (!sourceRecordId || !noteId) return
+  if (linkedRecordFor.value === noteId) return
+  try {
+    await assistantApi.linkRecord(sourceRecordId, { target_type: 'note', target_id: noteId })
+    linkedRecordFor.value = noteId
+    ElMessage.success('已自动关联助手记录')
+  } catch {
+    // 允许静默失败，避免打断笔记主流程
+  }
+}
+
 /* ---------------- 自动保存 ---------------- */
 
 /** 有改动则保存一次；返回 true=无事/成功，false=保存失败 */
@@ -192,6 +329,8 @@ async function tryAutoSave(): Promise<boolean> {
       const r = await http.post<{ id: string; updated: string }>('/notes', body)
       autoId.value = r.id
       markSaved(r.updated)
+      await linkSourceItem(r.id) // 来自工作台：首次建档后自动加入来源事项的相关资料（幂等）
+      await linkSourceRecord(r.id) // 来自助手：自动建立关联
     } else {
       const target = autoId.value || id.value
       if (!target) return true
@@ -234,14 +373,16 @@ async function doSave() {
       autoId.value = r.id
       markSaved(r.updated)
       ElMessage.success('创建成功')
-      router.replace(`/notes/${r.id}`)
+      await linkSourceItem(r.id) // 来自工作台：自动加入来源事项的相关资料（先等提示，再跳转，避免反馈被卸载吞掉）
+      await linkSourceRecord(r.id) // 来自助手：自动建立关联
+      router.replace({ path: `/notes/${r.id}`, query: sourceQ() })
     } else {
       const target = autoId.value || id.value
       if (!target) return
       const r = await http.put<{ updated: string }>(`/notes/${target}`, body)
       markSaved(r.updated)
       ElMessage.success('已保存')
-      if (isNew.value && autoId.value) router.replace(`/notes/${target}`) // 自动建档过的草稿，点创建=去阅读页
+      if (isNew.value && autoId.value) router.replace({ path: `/notes/${target}`, query: sourceQ() }) // 自动建档过的草稿，点创建=去阅读页
     }
   } catch (e: any) {
     ElMessage.error(e?.response?.data?.detail || '保存失败')
@@ -251,7 +392,7 @@ async function doSave() {
 }
 
 function goBack() {
-  if (id.value && !isNew.value) router.push(`/notes/${id.value}`)
+  if (id.value && !isNew.value) router.push({ path: `/notes/${id.value}`, query: sourceQ() })
   else router.push('/notes')
 }
 
@@ -278,6 +419,19 @@ onMounted(async () => {
     if (q) form.title = q
     if (route.query.parent !== undefined) form.parent = String(route.query.parent)
     if (route.query.folder !== undefined) form.folder = String(route.query.folder)
+
+    // 来自助手：若存在 source_record_id，调用 /api/assistant/records/{id}/note-draft 预填草稿
+    if (sourceRecordId) {
+      try {
+        const draft = await assistantApi.getNoteDraft(sourceRecordId)
+        if (draft.title && !form.title) form.title = draft.title
+        if (draft.content) form.content = draft.content
+        if (draft.summary && !form.summary) form.summary = draft.summary
+        if (draft.tags?.length && !tagsText.value) tagsText.value = draft.tags.join(', ')
+        ElMessage.info('已载入助手整理的笔记草稿')
+      } catch { /* ignore */ }
+    }
+
     markSaved() // 以当前表单为基准，此后有输入才算改动
     loading.value = false
     timer = setInterval(() => { tryAutoSave() }, AUTO_SAVE_MS)
@@ -343,4 +497,31 @@ html.theme-dark .doc-title { color: #cbd5e1; }
 html.theme-dark .fmt-seg button { color: #cbd5e1; }
 .fmt-seg button.on { background: var(--acc-grad, linear-gradient(135deg, #8b5cf6, #6366f1)); color: #fff; font-weight: 600; }
 .foot { display: flex; justify-content: flex-end; gap: 10px; margin-top: 14px; }
+
+/* 文本编辑器（Vditor 即时渲染）上方工具条：引用按钮 + 提示 */
+.md-toolbar { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; flex-wrap: wrap; }
+.md-toolbar-hint { font-size: 11.5px; color: var(--txt3); }
+html.theme-dark .md-toolbar-hint { color: var(--txt2); }
+</style>
+
+<style>
+/* 引用其它文章：选文章对话框（teleport 到 body，需非 scoped 样式；样式自 MarkdownEditor 搬入） */
+.mde-rf-tip { color: var(--txt2); font-size: 12px; margin: 2px 0 10px; }
+.mde-rf-list { max-height: 44vh; overflow-y: auto; display: grid; gap: 6px; margin-top: 10px; }
+.mde-rf-item {
+  display: flex; align-items: baseline; gap: 8px; width: 100%; text-align: left;
+  border: 1px solid rgba(148, 163, 184, 0.22); background: transparent; border-radius: 10px;
+  padding: 8px 12px; cursor: pointer; font-family: inherit; color: var(--txt1);
+  transition: border-color .15s, background .15s;
+}
+html.theme-dark .mde-rf-item { color: #cbd5e1; }
+.mde-rf-item:hover { border-color: var(--acc2); background: rgba(139, 92, 246, 0.08); }
+.mde-rf-type {
+  flex: none; font-size: 11px; padding: 1px 7px; border-radius: 999px;
+  background: rgba(167, 139, 250, 0.14); color: var(--acc2);
+}
+.mde-rf-title { font-weight: 600; font-size: 13.5px; flex: none; max-width: 50%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mde-rf-sum { color: var(--txt3); font-size: 12px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+html.theme-dark .mde-rf-sum { color: var(--txt2); }
+.mde-rf-empty { color: var(--txt2); font-size: 13px; text-align: center; padding: 24px 0; }
 </style>

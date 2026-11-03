@@ -37,6 +37,15 @@ def restore(tid: str, _user: dict = Depends(get_current)):
                 })
                 _save_index(data)
                 result["album_relisted"] = True
+    elif result.get("module") == "assistant":
+        from ..db import db
+        for rel in result.get("rels", []):
+            if rel.startswith("assistant/records/"):
+                parts = rel.split("/")
+                if len(parts) >= 3 and parts[2].isdigit():
+                    rid = int(parts[2])
+                    with db() as conn:
+                        conn.execute("UPDATE assistant_records SET archived=0 WHERE id=?", (rid,))
     return result
 
 

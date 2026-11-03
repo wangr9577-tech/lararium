@@ -219,4 +219,21 @@ html.theme-dark .ring-in { background: #111827; }
 .stat .num small { font-size: 12px; }
 .stat .lab { font-size: 12px; color: var(--txt2); }
 .ft-btns { display: flex; gap: 10px; flex-wrap: wrap; }
+
+.ft { padding:24px; margin-bottom:0; }
+.ft-main { min-height:230px; gap:24px; align-items:center; }
+.ring { width:144px; height:144px; background:rgba(160,135,195,.25); }
+.ring.running { background:#b9a0e5; }
+.ring-in { width:136px; height:136px; background:#fff; }
+:global(html.theme-dark) .ring-in { background:#272727; }
+.time { font-size:30px; line-height:36px; font-weight:700; }
+.state { margin-top:-24px; font-size:12px; line-height:16px; }
+.ft-side { min-width:200px; }
+.ft-title { font-size:20px; line-height:28px; font-weight:700; }
+.ft-sub { font-size:12px; line-height:20px; margin:8px 0 16px; }
+.ft-stats { gap:24px; margin-bottom:16px; flex-wrap:wrap; }
+.stat .num { font-size:20px; line-height:28px; font-weight:700; }.stat .lab { font-size:12px; line-height:16px; }
+.ft-btns { gap:8px; }.ft-btns :deep(.el-button + .el-button) { margin-left:0; }
+@media(max-width:480px) { .ft { padding:16px; }.ft-main { gap:16px; }.ring { width:112px; height:112px; }.ring-in { width:104px; height:104px; }.ft-side { min-width:0; } }
+
 </style>

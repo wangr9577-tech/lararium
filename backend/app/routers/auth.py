@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from .. import auth as authz
-from .. import config, crypto, vault
+from .. import autokey, config, crypto, vault
 from ..db import db
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -51,6 +51,10 @@ class LoginIn(BaseModel):
 class PasswordIn(BaseModel):
     old_password: str = Field(min_length=1, max_length=256)
     new_password: str = Field(min_length=8, max_length=256)
+
+
+class AutoUnlockIn(BaseModel):
+    password: str = Field(min_length=1, max_length=256)
 
 
 @router.post("/login")
@@ -103,6 +107,11 @@ def _unlock_vault(password: str) -> None:
         except OSError:
             pass
     vault.set_dek(dek)
+    try:
+        from .assistant import resume_paused_jobs
+        resume_paused_jobs()
+    except Exception:
+        pass
 
 
 @router.post("/logout")
@@ -115,19 +124,58 @@ def logout(user: dict = Depends(authz.get_current),
 
 @router.post("/lock")
 def lock(user: dict = Depends(authz.get_current)):
-    """一键上锁：撤销该用户全部 token 并清空内存数据密钥(DEK)。
+    """一键上锁：撤销该用户全部 token、清空内存数据密钥(DEK)，并撤销免密解锁。
 
     锁上后所有会话失效，加密正文/日记/相册等立即回到加密锁定态，
     必须重新输入主密码登录（login 会自动重新解锁 DEK）才能访问。
+
+    顺带撤销 `.kek.auto` 是必须的：否则「上锁」之后进程一重启又自动解锁，
+    上锁按钮就成了摆设。想恢复免密在 设置 → 账户安全 里重新打开即可（要输一次密码）。
     """
     authz.revoke_all_for(user["id"])
     vault.clear_dek()
-    return {"ok": True}
+    removed = autokey.disable()
+    return {"ok": True, "auto_unlock_revoked": removed > 0}
 
 
 @router.get("/me")
 def me(user: dict = Depends(authz.get_current)):
-    return {"id": user["id"], "username": user["username"]}
+    return {"id": user["id"], "username": user["username"], "auto_unlock": autokey.enabled()}
+
+
+# ---- 免密自动解锁（可选）：服务器重启后不再需要人工输入主密码 ----
+# 安全边界见 app/autokey.py 模块文档：它把「主密码」降级为「本机文件权限 + 备份口令」，
+# 仍挡住同机其他普通用户，不再挡 root / 恶意进程 / 同时拷走两个文件的人。
+
+def _auto_status() -> dict:
+    return {"enabled": autokey.enabled(), "unlocked": vault.has_dek(),
+            "key_outside_data": autokey.key_outside_data_dir(),
+            "key_path": str(config.AUTOKEY_KEY)}
+
+
+@router.get("/auto-unlock")
+def auto_unlock_status(user: dict = Depends(authz.get_current)):
+    return _auto_status()
+
+
+@router.post("/auto-unlock")
+def auto_unlock_enable(body: AutoUnlockIn, user: dict = Depends(authz.get_current)):
+    """开启免密：必须已解锁（DEK 在内存）且用当前主密码二次确认。"""
+    if not vault.has_dek():
+        raise HTTPException(status_code=423, detail="数据未解锁，请先用主密码登录")
+    with db() as conn:
+        row = conn.execute("SELECT * FROM users WHERE id=?", (user["id"],)).fetchone()
+    if row is None or not authz.verify_password(body.password, row["salt"], row["pw_hash"]):
+        raise HTTPException(status_code=400, detail="密码不正确")
+    info = autokey.enable(vault.dek())
+    return {"ok": True, **info, "unlocked": True}
+
+
+@router.delete("/auto-unlock")
+def auto_unlock_disable(user: dict = Depends(authz.get_current)):
+    """关闭免密：删掉包裹与本机密钥，之后重启回到必须输入主密码。"""
+    removed = autokey.disable()
+    return {"ok": True, "removed": removed, **_auto_status()}
 
 
 @router.put("/password")
@@ -157,6 +205,11 @@ def change_password(body: PasswordIn, user: dict = Depends(authz.get_current)):
         os.replace(config.KEYWRAP_JOURNAL, config.KEYWRAP_PATH)  # DB 已提交 → 转正
     if dek is not None:
         vault.set_dek(dek)
+    try:
+        from .assistant import resume_paused_jobs
+        resume_paused_jobs()
+    except Exception:
+        pass
     authz.revoke_all_for(user["id"])  # 令其他会话失效，需重新登录
     try:
         if config.INIT_PW_FILE.exists():

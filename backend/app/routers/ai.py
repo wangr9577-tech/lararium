@@ -97,3 +97,40 @@ def ai_report_draft(body: ReportDraftIn, _user: dict = Depends(get_current)):
 @router.get("/status")
 def ai_status(_user: dict = Depends(get_current)):
     return {"enabled": llm.is_enabled()}
+
+
+class TestAiIn(BaseModel):
+    endpoint: str | None = None
+    model: str | None = None
+    api_key: str | None = None
+    timeout: int | None = None
+    provider: str | None = None
+    tunnel_hint: str | None = None
+    name: str | None = None
+
+
+@router.post("/test")
+def ai_test_connection(body: TestAiIn | None = None, _user: dict = Depends(get_current)):
+    """测试模型连接。若传入 body 则测试该指定配置，否则测试当前全局生效配置。"""
+    override = body.model_dump(exclude_unset=True) if body else None
+    res = llm.check_diagnostics(override_cfg=override)
+    return {
+        "ok": res["connected"],
+        "latency_ms": res.get("latency_ms", 0),
+        "model": res.get("model", ""),
+        "provider": res.get("provider", ""),
+        "endpoint": res.get("endpoint", ""),
+        "reason": res.get("error_hint", "") if not res["connected"] else "连接成功",
+    }
+
+
+@router.get("/profiles")
+def ai_get_profiles(_user: dict = Depends(get_current)):
+    """获取所有模型配置、当前激活的配置以及可用模板。"""
+    profiles, active_id, enabled = llm.get_profiles_and_active()
+    return {
+        "enabled": enabled,
+        "active_profile_id": active_id,
+        "profiles": profiles,
+        "default_profiles": llm.DEFAULT_PROFILES,
+    }

@@ -42,13 +42,13 @@
         <div v-if="honors.length" class="rows">
           <div v-for="h in honors" :key="h.id" class="row3">
             <el-input v-model="h.year" placeholder="年份" class="w100" />
-            <el-input v-model="h.title" placeholder="荣誉名称，如：国家奖学金" />
+            <el-input v-model="h.title" placeholder="荣誉或奖项名称" />
             <el-button text type="danger" circle @click="honors = honors.filter((x) => x.id !== h.id)">
               <el-icon><Delete /></el-icon>
             </el-button>
           </div>
         </div>
-        <p v-else class="empty-hint">点右上角 ＋ 添加（国奖 / 大创 / 竞赛）</p>
+        <p v-else class="empty-hint">点击右上角 ＋ 添加荣誉与奖项</p>
         <div class="sec-ops"><el-button type="primary" size="small" @click="saveKey('me.honors', honors)">保存</el-button></div>
       </section>
 
@@ -76,14 +76,14 @@
             <div class="pub-row"><el-input v-model="p.note" placeholder="备注（oral / 投稿中…）" /></div>
           </div>
         </div>
-        <p v-else class="empty-hint">点右上角 ＋ 添加（IPMC / IP&M 特刊 / 海洋×AI）</p>
+        <p v-else class="empty-hint">点击右上角 ＋ 添加学术成果或论文</p>
         <div class="sec-ops"><el-button type="primary" size="small" @click="saveKey('me.publications', publications)">保存</el-button></div>
       </section>
       </div>
 
       <!-- 里程碑（占满两列） -->
       <section class="glass card span-all">
-        <div class="card-title"><el-icon><Flag /></el-icon>申请里程碑（如 KAUST 直博）
+        <div class="card-title"><el-icon><Flag /></el-icon>重要阶段里程碑
           <span class="unsaved" v-if="dirty.milestones">（未保存）</span>
           <el-button size="small" circle class="add-btn" @click="milestones.push({ id: uid(), time: '', title: '', note: '', done: false })">
             <el-icon><Plus /></el-icon>
@@ -95,7 +95,7 @@
             <div class="tl-row">
               <el-checkbox v-model="m.done" class="tl-done" />
               <el-input v-model="m.title" class="tl-title" placeholder="里程碑标题" />
-              <el-input v-model="m.time" class="w150" placeholder="时间，如 2027 秋" />
+              <el-input v-model="m.time" class="w150" placeholder="时间节点，如 2027 年秋" />
               <el-button text type="danger" circle @click="milestones = milestones.filter((x) => x.id !== m.id)">
                 <el-icon><Delete /></el-icon>
               </el-button>
@@ -103,7 +103,7 @@
             <el-input v-model="m.note" class="tl-note" placeholder="说明 / 下一步…" />
           </el-timeline-item>
         </el-timeline>
-        <p v-else class="empty-hint">点 ＋ 规划：英语成绩 → 套磁 → 文书与推荐信 → 申请提交</p>
+        <p v-else class="empty-hint">点击右上角 ＋ 添加里程碑规划</p>
         <div class="sec-ops"><el-button type="primary" size="small" @click="saveKey('me.milestones', milestones)">保存</el-button></div>
       </section>
     </div>
@@ -131,9 +131,9 @@ const milestones = ref<AnyRow[]>([])
 const dirty = reactive({ profile: false, honors: false, publications: false, milestones: false })
 
 const basicFields = [
-  { key: 'school', label: '学校', ph: '厦门大学' },
-  { key: 'major', label: '专业', ph: '大数据专业' },
-  { key: 'grade', label: '年级', ph: '24 级' },
+  { key: 'school', label: '学校', ph: '你的学校' },
+  { key: 'major', label: '专业', ph: '你的专业' },
+  { key: 'grade', label: '年级', ph: '入学年份 / 年级' },
 ]
 
 async function saveKey(key: string, data: any) {

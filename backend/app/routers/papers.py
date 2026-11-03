@@ -309,38 +309,6 @@ def add_related(paper_id: str, body: RelatedIn, _user: dict = Depends(get_curren
     return {"ok": True, "related_ids": new}
 
 
-class ToCardIn(BaseModel):
-    text: str = Field(min_length=1, max_length=6000)
-    hl_id: str = Field(default="", max_length=60)
-    title: str = Field(default="", max_length=200)
-
-
-@router.post("/{paper_id}/to-card")
-def paper_to_card(paper_id: str, body: ToCardIn, _user: dict = Depends(get_current)):
-    """论文高亮/选中文本 → 一键生成卡片（M2 联动）。"""
-    m = _load_meta(paper_id)
-    if m is None:
-        raise HTTPException(404, "论文不存在")
-    from .cards import create_card, CardIn
-    text = body.text.strip()
-    title = body.title.strip() or (text[:40] + ("…" if len(text) > 40 else ""))
-    card = create_card(CardIn(
-        title=title, content=f"> 摘录自《{m.get('title', '')}》{('（高亮 ' + body.hl_id + '）') if body.hl_id else ''}\n\n{text}",
-        paper_id=paper_id, ref_type="highlight", tags=["论文摘录"],
-    ), _user)
-    if body.hl_id:
-        try:
-            hl = vault.read_json(_hl_path(paper_id))
-            for h in hl.get("items", []):
-                if h.get("id") == body.hl_id:
-                    h.setdefault("card_id", card["id"])
-            vault.write_json(_hl_path(paper_id), hl)
-        except Exception:
-            pass
-    return {"card": card}
-
-
-
 @router.delete("/{paper_id}")
 def delete_paper(paper_id: str, _user: dict = Depends(get_current)):
     victims = [p for p in (_pdf_path(paper_id), _meta_path(paper_id), _hl_path(paper_id)) if p.is_file()]

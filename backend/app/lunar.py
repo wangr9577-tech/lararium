@@ -7,6 +7,9 @@
 """
 from __future__ import annotations
 
+import calendar
+from datetime import date as _date
+
 from lunardate import LunarDate
 
 MONTHS = "正二三四五六七八九十冬腊"
@@ -49,11 +52,22 @@ def lunar_text_of(date_str: str) -> str:
 
 
 def occurrences_in_year(date_str: str, year: int) -> list[dict]:
-    """返回该公历年内应标注的日期（公历固定日 + 农历对应日，去重）。"""
+    """返回该公历年内应标注的日期（公历固定日 + 农历对应日，去重；公历日优先，不被农历覆盖）。
+
+    边界：目标年该公历日非法（如平年的 2 月 29 日）时，回退到该年该月最后一天。
+    """
     _, sm, sd = _split(date_str)
-    out: dict[str, str] = {f"{year:04d}-{sm:02d}-{sd:02d}": "solar"}
+    out: dict[str, str] = {}
+    seen: set[str] = set()
+    # 公历固定日：先写入并占用 seen，保证 kind='solar' 不会被后续 lunar 覆盖
+    try:
+        _date(year, sm, sd)
+    except ValueError:
+        sd = calendar.monthrange(year, sm)[1]
+    solar_key = f"{year:04d}-{sm:02d}-{sd:02d}"
+    out[solar_key] = "solar"
+    seen.add(solar_key)
     lm, ld = solar_to_lunar_md(date_str)
-    seen = set()
     for ly in range(year - 1, year + 2):
         try:
             d = _to_solar(LunarDate(ly, lm, ld))

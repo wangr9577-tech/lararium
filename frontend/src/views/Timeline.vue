@@ -1,7 +1,7 @@
 <template>
   <div class="page">
     <div class="page-title">时光机</div>
-    <div class="page-sub">博客、笔记、日记与申请里程碑汇成一条时间轴，回看走过的路</div>
+    <div class="page-sub">博客、笔记、日记与重要里程碑汇成一条时间轴，回看走过的路</div>
 
     <!-- 年份切换 + 年度统计 -->
     <div class="glass ybar">
@@ -19,7 +19,7 @@
           <div class="titem milestone">
             <div class="tdot" />
             <div class="ttxt">
-              <div class="ttitle">申请里程碑</div>
+              <div class="ttitle">重要里程碑</div>
               <div v-for="m in milestones" :key="m.date + m.title" class="msub">
                 <span class="mcheck" :class="{ on: m.done }">{{ m.done ? '✓' : '○' }}</span>
                 <span :class="{ strike: m.done }">{{ m.title }}</span>
@@ -50,10 +50,10 @@
 
     <EmptyState v-else icon="Clock" title="时间轴还是空的"
       desc="写下的博客与日记会自动按时间出现在这里——先写几篇，再来回看一整年的轨迹。"
-      :features="['博客 / 学习笔记 / 项目经历 / 日记 统一时间轴', '申请里程碑（KAUST 直博线）自动纳入', '按年筛选 · 按月分组', '点击条目直达原文']">
+      :features="['博客 / 学习笔记 / 项目经历 / 日记 统一时间轴', '重要里程碑时间线自动纳入', '按年筛选 · 按月分组', '点击条目直达原文']">
       <template #default>
         <el-button type="primary" round style="margin-top:18px" @click="$router.push('/notes')">去写博客</el-button>
-        <el-button round style="margin-top:18px;margin-left:8px" @click="$router.push('/diary')">写日记</el-button>
+        <el-button round style="margin-top:18px;margin-left:8px" @click="$router.push('/schedule')">写日记</el-button>
       </template>
     </EmptyState>
   </div>
@@ -101,7 +101,7 @@ function typeName(t: string) {
 }
 
 function open(it: TlItem) {
-  if (it.kind === 'diary') router.push(`/diary?date=${it.ref}`)
+  if (it.kind === 'diary') router.push(`/schedule?date=${it.ref}`)
   else if (it.kind === 'note') router.push(`/notes/${it.ref}`)
 }
 

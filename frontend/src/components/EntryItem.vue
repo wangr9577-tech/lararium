@@ -1,7 +1,7 @@
 <template>
   <div class="entry" :class="`ty-${entry.type}`" :style="{ opacity: entry.done ? 0.55 : 1 }">
     <el-checkbox
-      v-if="entry.type !== 'event'"
+      v-if="checkable && entry.type !== 'event'"
       :model-value="entry.done" size="small" class="chk"
       @change="(v: any) => emit('toggle', v)"
     />
@@ -41,12 +41,13 @@ export interface Entry {
   done: boolean
 }
 
-defineProps<{ entry: Entry }>()
 const emit = defineEmits<{
   (e: 'toggle', done: boolean): void
   (e: 'edit', entry: Entry): void
   (e: 'del', entry: Entry): void
 }>()
+
+withDefaults(defineProps<{ entry: Entry; checkable?: boolean }>(), { checkable: true })
 </script>
 
 <style scoped>

@@ -26,7 +26,7 @@
         <el-form-item label="作者（可空）"><el-input v-model="ed.author" /></el-form-item>
         <el-form-item label="状态">
           <el-select v-model="ed.status" style="width: 120px">
-            <el-option v-for="s in ['想读', '在读', '读完']" :key="s" :label="s" :value="s" />
+            <el-option v-for="s in ['想读', '在读', '精读', '读完', '搁置']" :key="s" :label="s" :value="s" />
           </el-select>
         </el-form-item>
         <el-form-item label="分类">
@@ -35,6 +35,14 @@
           </el-select>
         </el-form-item>
         <el-form-item label="DOI / 链接（可空）"><el-input v-model="ed.link" placeholder="https://doi.org/…" /></el-form-item>
+        <el-form-item label="arXiv id（可空）"><el-input v-model="ed.arxiv_id" placeholder="如 2503.12345" /></el-form-item>
+        <el-form-item label="年份 / 期刊会议"><div class="yr-row">
+          <el-input v-model="ed.year" placeholder="年份" style="width: 90px" />
+          <el-input v-model="ed.venue" placeholder="期刊 / 会议名" />
+        </div></el-form-item>
+        <el-form-item label="作者（逗号分隔）"><el-input v-model="ed.authorsText" /></el-form-item>
+        <el-form-item label="摘要"><el-input v-model="ed.abstract" type="textarea" :rows="3" /></el-form-item>
+        <el-form-item label="关键词（逗号分隔）"><el-input v-model="ed.keywordsText" /></el-form-item>
         <el-form-item v-if="subOptions.length" label="子分组">
           <el-select v-model="ed.subcategory" filterable allow-create clearable style="width: 100%">
             <el-option v-for="s in subOptions" :key="s" :label="s" :value="s" />
@@ -44,6 +52,7 @@
         <el-form-item label="备注"><el-input v-model="ed.note" type="textarea" :rows="2" /></el-form-item>
       </el-form>
       <template #footer>
+        <el-button @click="importMeta">一键导入元数据（arXiv id）</el-button>
         <el-button @click="metaOpen = false">取消</el-button>
         <el-button type="primary" :loading="metaSaving" @click="saveMeta">保存</el-button>
       </template>
@@ -69,7 +78,10 @@ const curPage = ref(1)
 const pageTotal = ref(0)
 const metaOpen = ref(false)
 const metaSaving = ref(false)
-const ed = reactive({ title: '', author: '', status: '想读', tags: '', note: '', category: '', subcategory: '', link: '' })
+const ed = reactive({
+  title: '', author: '', status: '想读', tags: '', note: '', category: '', subcategory: '', link: '',
+  arxiv_id: '', year: '', venue: '', authorsText: '', abstract: '', keywordsText: '',
+})
 const categories = ref<string[]>([])
 const subcats = ref<Record<string, string[]>>({})
 const subOptions = computed(() => (ed.category ? (subcats.value[ed.category] || []) : []))
@@ -90,18 +102,42 @@ function saveMeta() {
   if (!paper.value) return
   metaSaving.value = true
   const tags = ed.tags.split(/[,，]/).map((t: string) => t.trim()).filter(Boolean)
+  const authors = ed.authorsText.split(/[,，]/).map((a: string) => a.trim()).filter(Boolean)
+  const keywords = ed.keywordsText.split(/[,，]/).map((k: string) => k.trim()).filter(Boolean)
   http.put(`/papers/${paper.value.id}/meta`, {
     title: ed.title.trim() || paper.value.title, author: ed.author.trim(),
     status: ed.status, tags, note: ed.note.trim(), page_count: paper.value.page_count,
     category: ed.category.trim(),
     subcategory: ed.subcategory.trim(),
     link: ed.link.trim(),
+    arxiv_id: ed.arxiv_id.trim(), year: ed.year.trim(), venue: ed.venue.trim(),
+    authors, abstract: ed.abstract.trim(), keywords,
   }).then((m: Paper) => {
-    paper.value = m
+    paper.value = { ...m, related_ids: (m as any).related_ids || [] }
     metaOpen.value = false
     ElMessage.success('已保存')
   }).catch((e: any) => ElMessage.error(e?.response?.data?.detail || '保存失败'))
     .finally(() => { metaSaving.value = false })
+}
+
+/** 按 arXiv id / DOI 一键拉取元数据 */
+async function importMeta() {
+  const src = ed.arxiv_id.trim() ? { source: 'arxiv', id: ed.arxiv_id.trim() } : null
+  if (!src) return ElMessage.warning('请先填 arXiv id（DOI 导入请把链接填到 DOI 框也可用）')
+  metaSaving.value = true
+  try {
+    const r = await http.post<{ meta: any }>('/papers/import-meta', src)
+    const m = r.meta
+    ed.title = m.title || ed.title
+    ed.arxiv_id = m.arxiv_id || ed.arxiv_id
+    ed.year = m.year || ed.year
+    ed.venue = m.venue || ed.venue
+    ed.authorsText = (m.authors || []).join(', ')
+    ed.abstract = m.abstract || ed.abstract
+    if (m.doi) ed.link = m.doi.startsWith('http') ? m.doi : `https://doi.org/${m.doi}`
+    ElMessage.success('元数据已拉取，点「保存」落盘')
+  } catch (e: any) { ElMessage.error(e?.response?.data?.detail || '拉取失败') }
+  finally { metaSaving.value = false }
 }
 
 async function removePaper() {
@@ -126,6 +162,12 @@ onMounted(async () => {
     ed.category = paper.value.category || ''
     ed.subcategory = paper.value.subcategory || ''
     ed.link = paper.value.link || ''
+    ed.arxiv_id = (paper.value as any).arxiv_id || ''
+    ed.year = (paper.value as any).year || ''
+    ed.venue = (paper.value as any).venue || ''
+    ed.authorsText = ((paper.value as any).authors || []).join(', ')
+    ed.abstract = (paper.value as any).abstract || ''
+    ed.keywordsText = ((paper.value as any).keywords || []).join(', ')
     try {
       const r = await http.get<{ categories: string[]; subcategories: Record<string, string[]> }>('/papers/categories')
       categories.value = r.categories
@@ -145,4 +187,5 @@ onMounted(async () => {
 .pmeta { display: flex; align-items: center; gap: 6px; margin-left: auto; }
 .pops { display: flex; gap: 8px; }
 .pg { font-size: 12px; color: var(--txt2); }
+.yr-row { display: flex; gap: 10px; width: 100%; }
 </style>

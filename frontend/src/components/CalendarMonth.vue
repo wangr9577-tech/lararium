@@ -99,12 +99,12 @@ const weeks = computed(() => {
 </script>
 
 <style scoped>
-.cm-head { display: grid; grid-template-columns: repeat(7, 1fr); margin-bottom: 4px; }
+.cm-head { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); margin-bottom: 4px; }
 .cw { text-align: center; font-size: 12px; color: var(--txt2); padding: 4px 0; }
 .cm-body { display: grid; gap: 4px; }
-.cm-week { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; }
+.cm-week { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 4px; }
 .day {
-  min-height: 96px; border-radius: 10px; padding: 5px 6px; cursor: pointer;
+  min-height: 96px; min-width: 0; border-radius: 10px; padding: 5px 6px; cursor: pointer;
   background: rgba(148, 163, 184, 0.05); border: 1px solid transparent;
   transition: background .12s, border-color .12s;
 }

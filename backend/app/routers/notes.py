@@ -44,7 +44,7 @@ MODULES = ("", "ielts")  # 空=普通博客笔记；ielts=雅思学习模块子�
 MAX_FOLDER_DEPTH = 3    # 目录最大深度（a=1 层，a/b=2 层）
 MAX_FOLDER_TOTAL = 160  # 目录全路径最大长度（笔记 folder 字段同样适用）
 FM_KEYS = ("title", "type", "fmt", "tags", "summary", "created", "updated", "module", "folder", "ppt", "pdf", "parent")
-FMTS = ("md", "ink")
+FMTS = ("md", "ink", "card")
 IMG_EXT = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png",
            "webp": "image/webp", "gif": "image/gif"}
 IMG_NAME_RE = re.compile(r"^[0-9a-f]{12}\.(?:jpg|jpeg|png|webp|gif)$")
@@ -82,7 +82,7 @@ def _split(raw: str) -> tuple[dict, str]:
         meta = yaml.safe_load(m.group(1)) or {}
     except yaml.YAMLError:
         meta = {}
-    return meta, m.group(2)
+    return meta, m.group(2).lstrip("\r\n")
 
 
 def _load(id_: str) -> dict | None:
@@ -110,8 +110,33 @@ def _load(id_: str) -> dict | None:
     }
 
 
-def _list_all() -> list[dict]:
+# ---------- 列表缓存（进程内，消除 列表/目录计数/标签云 三个接口重复全量解密） ----------
+# 安全前提：缓存里只有 frontmatter 明文元数据（不含正文），与 DEK 同生命周期——
+# vault.has_dek() 变假（数据上锁）时立即清空，锁定态绝不从缓存吐出任何内容。
+# 不加锁：本模块接口是同步函数（FastAPI 线程池执行），dict 赋值是原子的，
+# 最坏情况是两个请求同时重建，只是多算一次，结果一致，无害。
+_LIST_CACHE: dict = {"sig": None, "items": None}
+
+
+def _notes_sig() -> tuple:
+    """笔记目录签名：只用 p.stat()（绝不读文件内容、绝不解密）。
+    文件增/删/改名、mtime_ns 或 size 变化都会改变签名 → 缓存失效重建。"""
+    rows = []
+    for p in NOTES_DIR.glob("*.md"):
+        try:
+            st = p.stat()
+        except OSError:
+            continue
+        rows.append((p.name, st.st_mtime_ns, st.st_size))
+    return (vault.has_dek(), tuple(sorted(rows)))
+
+
+def _build_items(include_content: bool = False) -> list[dict]:
+    """单次遍历 NOTES_DIR 构建列表项（原 _list_all 循环体，行为逐字不变）。
+    include_content=True 时每项额外带内部字段 _search（正文明文），
+    仅供搜索匹配用，必须在返回给前端前 pop 掉，严禁泄漏到响应/日志。"""
     out = []
+    parent_counts: dict[str, int] = {}
     for p in sorted(NOTES_DIR.glob("*.md"), key=lambda x: x.stat().st_mtime, reverse=True):
         try:
             raw = vault.read_text(p)
@@ -122,22 +147,56 @@ def _list_all() -> list[dict]:
         meta, content = _split(raw)
         if not meta.get("title"):
             continue
+        par = meta.get("parent", "") or ""
+        if par:
+            parent_counts[par] = parent_counts.get(par, 0) + 1
+        fmt = _norm_fmt(meta.get("fmt", "md"))
         out.append({
             "id": p.stem,
             "title": meta.get("title", ""),
             "type": meta.get("type") if meta.get("type") in TYPES else "note",
-            "fmt": _norm_fmt(meta.get("fmt", "md")),
+            "fmt": fmt,
             "module": meta.get("module", "") or "",
             "folder": meta.get("folder", "") or "",
-            "parent": meta.get("parent", "") or "",
+            "parent": par,
             "tags": [t for t in (meta.get("tags") or []) if isinstance(t, str)],
             "summary": meta.get("summary", ""),
             "ppt": meta.get("ppt", "") or "",
             "pdf": meta.get("pdf", "") or "",
             "created": meta.get("created", ""),
             "updated": meta.get("updated", ""),
+            "content": (content.rstrip("\n") if fmt == "card" else ""),
+            **({"_search": content or ""} if include_content else {}),
         })
+    for n in out:
+        n["subs"] = parent_counts.get(n["id"], 0)  # 直接子页数（parent 指向该 id 的笔记数）
     return out
+
+
+def _list_all(include_content: bool = False) -> list[dict]:
+    """列出全部笔记（按 mtime 倒序）。include_content=True 时每项额外带内部字段 _search
+    （正文明文），仅供搜索匹配用，必须在返回给前端前 pop 掉，严禁泄漏到响应/日志。
+
+    include_content=False（列表/目录计数/标签云三个接口共用路径）走进程内缓存：
+    签名（_notes_sig，纯 stat，不解密）未变时直接返回缓存副本，
+    避免一次页面交互触发三次全量解密。"""
+    if include_content:
+        # 搜索路径：一次性全量解密含正文，不读缓存也不写缓存
+        return _build_items(include_content=True)
+    if not vault.has_dek():
+        # 数据已上锁：先清缓存，再走原路径（vault.read_text 会正常抛 423，
+        # 保持「锁定态绝不吐明文」的安全语义——锁定态绝不从缓存返回数据）
+        _LIST_CACHE["sig"] = None
+        _LIST_CACHE["items"] = None
+        return _build_items(include_content=False)
+    sig = _notes_sig()
+    cached = _LIST_CACHE["items"]
+    if _LIST_CACHE["sig"] == sig and cached is not None:
+        return [dict(it) for it in cached]  # 必须副本：防止调用方改动污染缓存
+    items = _build_items(include_content=False)
+    _LIST_CACHE["sig"] = sig
+    _LIST_CACHE["items"] = items
+    return [dict(it) for it in items]
 
 
 # ---------- 模型 ----------
@@ -152,6 +211,7 @@ class NoteIn(BaseModel):
     tags: list[str] = Field(default_factory=list)
     summary: str = Field(default="", max_length=600)
     content: str = ""
+    source_record_id: int | None = None  # 来源助手记录 id（写笔记联动）
 
 
 def _check_module(module: str) -> None:
@@ -163,7 +223,7 @@ def _clean(body: NoteIn, module: str | None = None, folder: str | None = None, p
     if body.type not in TYPES:
         raise HTTPException(400, "type 只能是 blog / note / project")
     if body.fmt not in FMTS:
-        raise HTTPException(400, "fmt 只能是 md（文本）/ ink（白板手写）")
+        raise HTTPException(400, "fmt 只能是 md（文本）/ ink（白板手写）/ card（卡片速记）")
     if body.fmt == "ink":
         # 白板正文必须是一段合法 JSON：v1 单页 {page, strokes} 或 v2 多页 {pages:[...]}
         try:
@@ -212,13 +272,15 @@ def _clean(body: NoteIn, module: str | None = None, folder: str | None = None, p
 @router.get("")
 def list_notes(type_: str | None = None, tag: str | None = None, q: str | None = None,
                module: str | None = None, folder: str | None = None, parent: str | None = None,
+               subtree: bool = True,
                _user: dict = Depends(get_current)):
     """module 过滤：不传=只看普通笔记（排除雅思子页）；'all'=全部；'ielts'=雅思子页。
-    folder 过滤：不传=不过滤；''（显式空）=只看未分类；其它=目录全路径，子树匹配
-    （含该目录自身及所有子目录下的笔记）。
+    folder 过滤：不传=不过滤；''（显式空）=只看未分类；其它=目录全路径。
+    subtree 过滤：True（缺省）=子树匹配（含该目录自身及所有子目录下的笔记，向后兼容）；
+    False=精确匹配（只看直接归属该目录的笔记，笔记只在其最邻近上级文件夹显示）。
     parent 过滤：不传=只看顶层（排除笔记内子页）；''=顶层；<id>=该父页面的子页。"""
     items = []
-    for n in _list_all():
+    for n in _list_all(include_content=bool(q and q.strip())):
         m = n.get("module", "") or ""
         if module == "all":
             pass
@@ -233,17 +295,20 @@ def list_notes(type_: str | None = None, tag: str | None = None, q: str | None =
                 continue
         elif np != parent:
             continue
-        if folder is not None and not _folder_match(n.get("folder", "") or "", folder):
+        if folder is not None and not _folder_match(n.get("folder", "") or "", folder, subtree):
             continue
         if type_ and n["type"] != type_:
             continue
         if tag and tag not in n["tags"]:
             continue
         if q:
-            hay = f'{n["title"]} {n["summary"]} {" ".join(n["tags"])}'.lower()
+            hay = f'{n["title"]} {n["summary"]} {" ".join(n["tags"])} {n.get("_search", "")}'.lower()
             if q.strip().lower() not in hay:
                 continue
         items.append(n)
+    # 正文是解密后的明文，仅在内存里用于搜索匹配；返回前必须剔除内部字段 _search
+    for n in items:
+        n.pop("_search", None)
     return {"items": items}
 
 
@@ -307,10 +372,13 @@ def clean_folder_path(path: str) -> str:
     return p
 
 
-def _folder_match(note_folder: str, folder: str) -> bool:
-    """笔记 folder 是否命中筛选：''=只看未分类；否则子树匹配（自身 + 全部子目录）。"""
+def _folder_match(note_folder: str, folder: str, subtree: bool = True) -> bool:
+    """笔记 folder 是否命中筛选：''=只看未分类；
+    否则 subtree=true 子树匹配（自身 + 全部子目录），subtree=false 精确匹配（只看直接归属该目录的笔记）。"""
     if folder == "":
         return note_folder == ""
+    if not subtree:
+        return note_folder == folder
     return note_folder == folder or note_folder.startswith(folder + "/")
 
 
@@ -505,7 +573,28 @@ def create_note(body: NoteIn, _user: dict = Depends(get_current)):
     now = now_iso()
     meta = {**data, "created": now, "updated": now}
     _dump_file(id_, meta, data["content"])
+    if body.source_record_id:
+        try:
+            with db() as conn:
+                conn.execute(
+                    "INSERT OR IGNORE INTO assistant_links(record_id, target_type, target_id, created_at) VALUES(?,?,?,?)",
+                    (body.source_record_id, "note", id_, now),
+                )
+                conn.execute(
+                    "UPDATE assistant_records SET read_state='noted', updated_at=? WHERE id=?",
+                    (now, body.source_record_id),
+                )
+        except Exception:
+            pass
     return {"id": id_, **{k: meta[k] for k in ("title", "type", "fmt", "module", "folder", "parent", "tags", "summary", "created", "updated")}}
+
+
+def _renamed_only(old: dict, data: dict) -> bool:
+    """是否「纯改名」：除 title 外，内容与元数据完全一致（不算内容更新）。"""
+    for k in ("type", "fmt", "module", "folder", "parent", "summary", "content"):
+        if (old.get(k) or "") != (data.get(k) or ""):
+            return False
+    return [t for t in (old.get("tags") or [])] == list(data.get("tags") or [])
 
 
 @router.put("/{note_id}")
@@ -518,10 +607,14 @@ def update_note(note_id: str, body: NoteIn, _user: dict = Depends(get_current)):
     folder = body.folder if body.folder is not None else old.get("folder", "")
     parent = body.parent if body.parent is not None else old.get("parent", "")
     data = _clean(body, module=module, folder=folder, parent=parent)
+    updated = now_iso()
+    # 纯改名不算内容更新：沿用原时间戳，避免列表按更新时间排序时笔记跳到最前
+    if old.get("updated") and _renamed_only(old, data):
+        updated = old["updated"]
     meta = {
         **data,
         "created": old["created"],
-        "updated": now_iso(),
+        "updated": updated,
     }
     if old.get("ppt"):
         meta["ppt"] = old["ppt"]  # PPT 笔记标记在编辑时保留

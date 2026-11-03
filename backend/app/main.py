@@ -15,11 +15,15 @@ from . import auth as authz
 from . import config
 from .auth import bootstrap_admin
 from .db import init_db
+from . import autokey  # 免密自动解锁（可选，默认关闭，见 app/autokey.py）
 from .routers import auth as auth_router
 from .routers import album as album_router
 from .routers import anniversary as anniversary_router
+from .routers import daynote as daynote_router
 from .routers import diary as diary_router
 from .routers import focus as focus_router
+# ---- 项目文档源（外部 md 挂载：浏览/搜索/阅读/编辑，只认 CODE_ROOT 之内的目录）----
+from .routers import fs as fs_router
 from .routers import holiday as holiday_router
 from .routers import ielts as ielts_router
 from .routers import ledger as ledger_router
@@ -34,21 +38,35 @@ from .routers import site as site_router
 from .routers import timeline as timeline_router
 from .routers import translate, vocab as vocab_router
 from .routers import trash as trash_router
-# ---- 科研工作台（P1/P2/P3）----
+# ---- 工作台（事项树 / 当前思路 / 小记 / 收集箱 / 相关资料）----
+from .routers import workbench as workbench_router
+# ---- AI 助手（论文摘要 / 设置页自检）仍保留 ----
 from .routers import ai as ai_router
-from .routers import cards as cards_router
-from .routers import experiments as experiments_router
-from .routers import fs as fs_router
-from .routers import ideas as ideas_router
-from .routers import reports as reports_router
-from .routers import submissions as submissions_router
-from .routers import writing as writing_router
+# ---- 助手（Assistant：通知聚合研判 / 稍后看轻量卡片 / 日程联动）----
+from .routers import assistant as assistant_router
+# ---- 资产与附件管理（Blossom 式孤立文件体检与安全清理）----
+from .routers import assets as assets_router
 
 logging.basicConfig(level=logging.INFO)
 
 init_db()
 bootstrap_admin()
 authz.sweep_expired()  # 启动清一轮历史过期会话（P1 token 治理）
+
+# 免密自动解锁（可选）：解开就不必再人工输主密码；任何失败都只当没开启，绝不阻断启动
+if autokey.try_unlock():
+    logging.getLogger("kruskal").info(
+        "免密解锁生效（本机密钥：%s）：重启后无需输入主密码；"
+        "可在 设置 → 账户安全 关闭，「一键上锁」会同时撤销", config.AUTOKEY_KEY)
+    try:
+        assistant_router.resume_paused_jobs()
+    except Exception as e:
+        logging.getLogger("kruskal").warning("Startup resume_paused_jobs error: %s", e)
+
+try:
+    assistant_router.auto_archive_stale_threads(days=180)
+except Exception as e:
+    logging.getLogger("kruskal").warning("Startup auto_archive_stale_threads error: %s", e)
 
 # P2-L4：生产不公开 OpenAPI 接口结构（摸接口面变小）；KRUSKAL_DEV=1 才开 /docs
 _IS_DEV = os.environ.get("KRUSKAL_DEV") == "1"
@@ -73,7 +91,7 @@ async def auth_and_csp_guard(request: Request, call_next):
     path = request.url.path
     if path.startswith("/api/") and not any(path == p or path.startswith(p + "/") for p in _PUBLIC_API):
         header = request.headers.get("authorization", "")
-        token = header[7:] if header.startswith("Bearer ") else ""
+        token = header[7:] if header.startswith("Bearer ") else request.query_params.get("token", "")
         if authz.token_user(token) is None:
             resp = JSONResponse({"detail": "未登录"}, status_code=401)
             if _CSP_ON:
@@ -91,9 +109,12 @@ for r in (auth_router.router, settings_router.router, site_router.router,
           share_router.router, album_router.router, timeline_router.router,
           ledger_router.router, ielts_router.router, ppt_router.router,
           pdf_router.router, trash_router.router,
-          cards_router.router, ideas_router.router, fs_router.router,
-          ai_router.router, experiments_router.router, writing_router.router,
-          submissions_router.router, reports_router.router):
+          ai_router.router,
+          daynote_router.router,
+          workbench_router.router,
+          fs_router.router,
+          assistant_router.router,
+          assets_router.router):
     app.include_router(r)
 
 

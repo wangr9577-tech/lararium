@@ -1,5 +1,7 @@
 <template>
   <div class="page" v-loading="loading">
+    <!-- 顶部阅读进度条：随滚动填充 -->
+    <div class="read-progress" :style="{ width: progress + '%' }" />
     <div v-if="note" class="view">
       <div class="head">
         <div>
@@ -13,7 +15,7 @@
           </div>
         </div>
         <div class="ops">
-          <el-button @click="$router.push('/notes')">返回列表</el-button>
+          <el-button :title="backTitle" @click="router.push(backTarget)">{{ backLabel }}</el-button>
           <template v-if="isInk">
             <el-button type="success" plain @click="exportPng">
               <el-icon style="margin-right:4px"><Download /></el-icon>导出 PNG
@@ -31,6 +33,18 @@
           <el-button type="danger" plain @click="remove">删除</el-button>
         </div>
       </div>
+      <!-- 目录（仅 Markdown 笔记、且标题多于 1 个时显示） -->
+      <nav v-if="!isInk && toc.length > 1" class="toc glass">
+        <div class="toc-title">目录</div>
+        <a
+          v-for="(t, i) in toc"
+          :key="t.id"
+          class="toc-item"
+          :class="{ 'lv3': t.level === 3 }"
+          :href="`#${t.id}`"
+          @click.prevent="jumpTo(t.id)"
+        >{{ t.text }}</a>
+      </nav>
       <article class="article glass">
         <div v-if="note.summary" class="lead">{{ note.summary }}</div>
         <WhiteboardCanvas v-if="isInk" ref="wbRef" :model-value="note.content" readonly />
@@ -58,23 +72,44 @@
         </div>
         <div v-else class="sp-empty">还没有子页 —— 点「新建子页」，在这篇笔记下面挂子页面</div>
       </div>
+
+      <!-- 上一篇 / 下一篇（按列表顺序：顶层=更新时间倒序；子页=同一父页的子页顺序） -->
+      <div v-if="prevNote || nextNote" class="pn">
+        <button type="button" class="pn-item" :class="{ off: !prevNote }" :disabled="!prevNote"
+          @click="prevNote && goNote(prevNote.id)">
+          <span class="pn-k">← 上一篇</span>
+          <span class="pn-t">{{ prevNote ? prevNote.title : '没有更新的文章' }}</span>
+          <span class="pn-s">{{ prevNote?.summary || '' }}</span>
+        </button>
+        <button type="button" class="pn-item pn-r" :class="{ off: !nextNote }" :disabled="!nextNote"
+          @click="nextNote && goNote(nextNote.id)">
+          <span class="pn-k">下一篇 →</span>
+          <span class="pn-t">{{ nextNote ? nextNote.title : '没有更早的文章' }}</span>
+          <span class="pn-s">{{ nextNote?.summary || '' }}</span>
+        </button>
+      </div>
     </div>
     <div v-else-if="!loading" class="miss">笔记不存在或已被删除</div>
+
+    <!-- 回到顶部：滚动超过 400px 出现 -->
+    <button v-if="showTop" class="to-top" title="回到顶部" @click="toTop">
+      <el-icon><ArrowUp /></el-icon>
+    </button>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { useRoute, useRouter, type LocationQueryRaw, type RouteLocationRaw } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { EditPen, Download, Plus } from '@element-plus/icons-vue'
+import { EditPen, Download, Plus, ArrowUp } from '@element-plus/icons-vue'
 import { http } from '../api/client'
 import { renderMd } from '../utils/md'
 import { hydrateImages } from '../utils/media'
 import ShareDialog from '../components/ShareDialog.vue'
 import WhiteboardCanvas from '../components/WhiteboardCanvas.vue'
 
-interface Note { id: string; title: string; type: string; fmt?: string; ppt?: string; pdf?: string; parent?: string; tags: string[]; summary: string; created: string; updated: string; content: string }
+interface Note { id: string; title: string; type: string; fmt?: string; ppt?: string; pdf?: string; folder?: string; parent?: string; tags: string[]; summary: string; created: string; updated: string; content: string }
 interface SubNote { id: string; title: string; summary: string; fmt?: string; updated: string }
 
 const route = useRoute()
@@ -84,9 +119,106 @@ const pdfLoading = ref(false)
 const note = ref<Note | null>(null)
 const wbRef = ref<InstanceType<typeof WhiteboardCanvas> | null>(null)
 const articleEl = ref<HTMLElement>()
+/** 真实滚动容器（AppShell 的 .content；window 永远不滚动，scrollY 恒为 0） */
+const host = ref<HTMLElement | null>(null)
 const subs = ref<SubNote[]>([])
 const html = computed(() => renderMd(note.value?.content || ''))
 const isInk = computed(() => note.value?.fmt === 'ink')
+
+/* ---------------- 返回列表：回到「最邻近一层」，不直接跳根目录 ---------------- */
+
+/** 「返回列表」目标：
+ *  · 普通文章 → 其所属目录（folder 全路径，如 'A/B'）；folder 为空=未分类 → 根视图
+ *    （未分类文章本来就只在根视图显示，根视图即它最近的一层）；
+ *  · 子页（parent 非空）→ 父文章页（子页只出现在父页的「子页面」面板里，目录列表不显示它）。
+ *  进入阅读页时携带的 type/tag/q 筛选一并带回，返回后仍是同一筛选视图。 */
+const backTarget = computed<RouteLocationRaw>(() => {
+  const query: LocationQueryRaw = {}
+  for (const k of ['type', 'tag', 'q'] as const) {
+    const v = route.query[k]
+    if (typeof v === 'string' && v) query[k] = v
+  }
+  const cur = note.value
+  if (cur?.parent) return { path: `/notes/${cur.parent}`, query } // 子页：回父页
+  if (cur?.folder) query.dir = cur.folder // 回到该文章所在的最邻近目录
+  return { path: '/notes', query }
+})
+/** 按钮文案：子页回父页，用「返回上级」更准确 */
+const backLabel = computed(() => (note.value?.parent ? '返回上级' : '返回列表'))
+/** 悬停提示：明确回到哪一层 */
+const backTitle = computed(() => {
+  if (note.value?.parent) return '返回所属父文章'
+  const f = note.value?.folder
+  return f ? `返回「${f}」列表` : '返回未分类列表'
+})
+
+/** 篇间跳转（上一篇/下一篇）：带上当前 query（筛选态），换篇后「返回列表」语义不变 */
+function goNote(id: string) {
+  router.push({ path: `/notes/${id}`, query: route.query })
+}
+
+/* ---------------- 长文阅读体验：目录(TOC) / 顶部阅读进度条 / 回到顶部 ---------------- */
+
+/** 目录条目（h1/h2/h3），id 用稳定英文锚点，不用中文 */
+const toc = ref<{ id: string; text: string; level: number }[]>([])
+/** 阅读进度（0-100），驱动顶部进度条宽度 */
+const progress = ref(0)
+/** 是否显示「回到顶部」按钮（滚动超过 400px 才出现） */
+const showTop = ref(false)
+
+/** 从正文构建目录：取 h1/h2/h3，赋稳定 id，跳过空标题 */
+function buildToc() {
+  if (!articleEl.value) { toc.value = []; return }
+  const heads = articleEl.value.querySelectorAll('h1, h2, h3')
+  const list: { id: string; text: string; level: number }[] = []
+  heads.forEach((h, index) => {
+    const text = (h.textContent || '').trim()
+    if (!text) return
+    h.id = `toc-${index + 1}`
+    list.push({ id: h.id, text, level: Number(h.tagName.slice(1)) })
+  })
+  toc.value = list
+}
+
+/** 目录点击平滑滚动到对应标题（视觉留白改由 CSS scroll-margin-top 处理；嵌套滚动下 window.scrollBy 无效） */
+function jumpTo(id: string) {
+  document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+}
+
+/** 回到顶部：对真实滚动容器生效（拿不到再回退 window） */
+function toTop() {
+  if (host.value) host.value.scrollTo({ top: 0, behavior: 'smooth' })
+  else window.scrollTo({ top: 0, behavior: 'smooth' })
+}
+
+/** 滚动：更新阅读进度条宽度 + 控制「回到顶部」显隐（有容器用容器计算，否则回退 window） */
+function onScroll() {
+  if (host.value) {
+    const el = host.value
+    const max = el.scrollHeight - el.clientHeight
+    progress.value = max > 0 ? Math.min(100, Math.max(0, (el.scrollTop / max) * 100)) : 0
+    showTop.value = el.scrollTop > 400
+    return
+  }
+  const max = document.documentElement.scrollHeight - window.innerHeight
+  progress.value = max > 0 ? Math.min(100, Math.max(0, (window.scrollY / max) * 100)) : 0
+  showTop.value = window.scrollY > 400
+}
+
+/** 把 scroll 监听绑定到真实滚动容器（.content）；articleEl 就绪后调用，换篇笔记需重新绑定 */
+function attachScroll() {
+  detachScroll()
+  host.value = (articleEl.value?.closest('.content') as HTMLElement | null)
+  const target: HTMLElement | Window = host.value || window
+  target.addEventListener('scroll', onScroll, { passive: true })
+  onScroll() // 绑定后立即校准一次
+}
+
+/** 解绑 scroll 监听（attachScroll 的逆操作） */
+function detachScroll() {
+  const target: HTMLElement | Window = host.value || window
+  target.removeEventListener('scroll', onScroll)
+}
 
 /* ---------------- 子页面（父页面笔记挂载的 md 子页） ---------------- */
 
@@ -112,6 +244,25 @@ async function newSub() {
   router.push(title
     ? `/notes/new?parent=${note.value.id}&title=${encodeURIComponent(title)}`
     : `/notes/new?parent=${note.value.id}`)
+}
+
+/** 相邻文章候选：顶层笔记=全部顶层笔记（后端按文件更新时间倒序）；子页=同一父页下的子页列表 */
+const siblings = ref<{ id: string; title: string; summary: string }[]>([])
+const navIdx = computed(() => siblings.value.findIndex((s) => s.id === note.value?.id))
+/** 上一篇=列表里更靠前（更新）的一篇；下一篇=更靠后（更旧）的一篇 */
+const prevNote = computed(() => (navIdx.value > 0 ? siblings.value[navIdx.value - 1] : null))
+const nextNote = computed(() => (navIdx.value >= 0 && navIdx.value < siblings.value.length - 1 ? siblings.value[navIdx.value + 1] : null))
+
+/** 加载相邻文章列表（顶层与子页都调；401/423 或异常时静默，不阻断正文） */
+async function loadSiblings() {
+  const cur = note.value
+  if (!cur) { siblings.value = []; return }
+  try {
+    // 顶层笔记：/notes?module= 返回全部顶层普通笔记（后端已按更新时间倒序）；子页：其父页下的子页列表
+    const url = cur.parent ? `/notes?parent=${encodeURIComponent(cur.parent)}` : '/notes?module='
+    const r = await http.get<{ items: { id: string; title: string; summary: string }[] }>(url)
+    siblings.value = r.items || []
+  } catch { siblings.value = [] } // 401/423 或异常时静默，不阻断正文
 }
 
 /* ---------------- 站内引用：点击跳转 + 悬停显示目标文章标题 ---------------- */
@@ -185,15 +336,15 @@ function exportPng() {
 async function remove() {
   const subCnt = subs.value.length
   const tip = subCnt
-    ? `确定删除这篇笔记？其下 ${subCnt} 个子页将一并删除，不可恢复。`
-    : '确定删除这篇笔记？删除后不可恢复。'
+    ? `确定删除这篇笔记？其下 ${subCnt} 个子页将一并删除（进回收站，可随时恢复）。`
+    : '确定删除这篇笔记？删除后进入回收站，可随时恢复。'
   try {
     await ElMessageBox.confirm(tip, '删除确认', { type: 'warning' })
   } catch { return }
   try {
     await http.del(`/notes/${note.value!.id}`)
-    ElMessage.success('已删除')
-    router.push('/notes')
+    ElMessage.success('已移入回收站（可在回收站恢复）')
+    router.push(backTarget.value) // 删除后回到该笔记原本所在的那一层（同「返回列表」语义）
   } catch (e: any) {
     ElMessage.error(e?.response?.data?.detail || '删除失败')
   }
@@ -207,8 +358,11 @@ async function load() {
     document.title = `${r.title} · 阅读`
     await nextTick()
     fillInternalTitles()
+    buildToc() // 正文渲染完成后构建目录
+    attachScroll() // articleEl 已存在：重新绑定到正确的滚动容器并校准
     hydrateImages(articleEl.value) // 站内图片 → 带鉴权 blob URL
     if (!r.parent) loadSubs() // 顶层笔记同时加载子页列表
+    loadSiblings() // 顶层与子页都加载「上一篇/下一篇」候选列表
   } catch (e: any) {
     if (e?.response?.status !== 401 && e?.response?.status !== 423) {
       ElMessage.error(e?.response?.data?.detail || '加载失败')
@@ -221,9 +375,17 @@ async function load() {
 // 阅读页内互相跳转（SPA）时按路由参数重载文章
 watch(() => route.params.id, load)
 
+// 正文变化（如换篇笔记、内容重渲染）后重建目录
+watch(html, async () => { await nextTick(); buildToc() })
+
 onMounted(() => {
   loadTitleMap() // 静默，不阻塞正文
   load()
+  attachScroll() // 初始绑定（此时 articleEl 可能还没渲染，回退 window；load 成功后会重新绑定到 .content）
+})
+
+onBeforeUnmount(() => {
+  detachScroll()
 })
 </script>
 
@@ -279,6 +441,47 @@ onMounted(() => {
 }
 html.theme-dark .lead { color: var(--txt2); }
 .miss { text-align: center; color: var(--txt2); padding: 60px 0; }
+
+/* ---------- 目录（TOC） ---------- */
+.toc { padding: 12px 16px; margin-bottom: 14px; border-radius: 14px; }
+.toc-title { font-size: 12.5px; font-weight: 700; color: var(--txt3); margin-bottom: 6px; }
+.toc-item {
+  display: block; font-size: 13px; color: var(--txt2); text-decoration: none;
+  padding: 2px 0; border-left: 2px solid transparent; padding-left: 8px;
+  transition: color 0.15s, border-color 0.15s;
+}
+.toc-item:hover { color: var(--acc2); border-left-color: var(--acc2); }
+.toc-item.lv3 { padding-left: 22px; font-size: 12.5px; }
+
+/* ---------- 顶部阅读进度条 ---------- */
+.read-progress {
+  position: fixed; top: 0; left: 0; height: 3px; z-index: 2000;
+  background: var(--acc-grad); transition: width 0.1s linear;
+}
+
+/* ---------- 回到顶部 ---------- */
+.to-top {
+  position: fixed; right: 26px; bottom: 30px; z-index: 2000;
+  width: 40px; height: 40px; border-radius: 50%; border: none; cursor: pointer;
+  color: #fff; background: var(--acc-grad); box-shadow: 0 8px 22px rgba(139, 92, 246, 0.35);
+  display: grid; place-items: center; font-size: 17px;
+}
+
+/* ---------- 上一篇 / 下一篇 ---------- */
+.pn { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 16px; }
+.pn-item {
+  display: grid; gap: 4px; text-align: left; padding: 14px 18px; border-radius: 14px;
+  cursor: pointer; font-family: inherit; color: var(--txt1);
+  border: 1px solid rgba(148, 163, 184, 0.22); background: rgba(148, 163, 184, 0.06);
+  transition: border-color 0.15s, transform 0.15s;
+}
+.pn-item:hover:not(.off) { border-color: var(--acc2); transform: translateY(-2px); }
+.pn-item.off { opacity: 0.55; cursor: default; }
+.pn-r { text-align: right; }
+.pn-k { font-size: 12px; color: var(--txt3); }
+.pn-t { font-size: 14.5px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pn-s { font-size: 12.5px; color: var(--txt2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 700px) { .pn { grid-template-columns: 1fr; } }
 </style>
 
 <style>
@@ -287,6 +490,8 @@ html.theme-dark .article .markdown-body { color: #e2e8f0; }
 .article .markdown-body h1 { font-size: 1.8em; margin: 1em 0 0.5em; padding-bottom: 8px; border-bottom: 2px solid rgba(167, 139, 250, 0.3); }
 .article .markdown-body h2 { font-size: 1.45em; margin: 1em 0 0.45em; padding-left: 10px; border-left: 4px solid var(--acc2); }
 .article .markdown-body h3 { font-size: 1.2em; margin: 0.9em 0 0.4em; }
+/* 目录跳转时给正文标题留滚动留白（嵌套滚动容器下 window.scrollBy 无效，改用 CSS） */
+.article .markdown-body h1, .article .markdown-body h2, .article .markdown-body h3 { scroll-margin-top: 12px; }
 .article .markdown-body p { margin: 0.65em 0; }
 .article .markdown-body code { background: rgba(139, 92, 246, 0.12); padding: 1px 7px; border-radius: 6px; font-family: Consolas, monospace; font-size: 0.92em; }
 .article .markdown-body pre { background: rgba(15, 23, 42, 0.92); color: #e2e8f0; padding: 14px 18px; border-radius: 12px; overflow-x: auto; }

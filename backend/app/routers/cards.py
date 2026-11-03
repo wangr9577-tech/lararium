@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import uuid
 from datetime import datetime
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -26,8 +27,8 @@ def _now() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
-def _path(card_id: int) -> str:
-    return str(CARDS_DIR / f"{card_id}.md")
+def _path(card_id: int) -> Path:
+    return CARDS_DIR / f"{card_id}.md"
 
 
 def _row(r, with_content: bool = True) -> dict:

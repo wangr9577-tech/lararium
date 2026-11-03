@@ -1,18 +1,18 @@
 <template>
   <div class="login-page">
-    <div class="blob b1" /><div class="blob b2" /><div class="blob b3" />
+    <div class="login-intro"><div class="login-eyebrow">A SPACE OF YOUR OWN</div><h2>把生活与灵感，<br>安放在这里<span>。</span></h2><p>日程、笔记、阅读和专注，陪你整理每一天。</p><div class="intro-bottom">KRUSKAL <span> / </span> PERSONAL WORKSPACE</div></div>
     <div class="login-card glass">
-      <div class="logo">K</div>
+      <div class="login-label"><div class="logo">K</div><span>WELCOME BACK</span></div>
       <h1 class="grad-text">{{ site.name }}</h1>
-      <p v-if="site.slogan" class="slogan">{{ site.slogan }}</p>
+      <p class="slogan">{{ site.slogan || '欢迎回来，登录你的个人空间。' }}</p>
       <el-form :model="form" @submit.prevent="doLogin">
         <el-form-item>
-          <el-input v-model="form.username" size="large" placeholder="用户名" :prefix-icon="User" />
+          <el-input v-model="form.username" size="large" placeholder="用户名" aria-label="用户名" :prefix-icon="User" />
         </el-form-item>
         <el-form-item>
           <el-input
             v-model="form.password" size="large" type="password" placeholder="密码"
-            :prefix-icon="Lock" show-password @keyup.enter="doLogin"
+            aria-label="密码" :prefix-icon="Lock" show-password @keyup.enter="doLogin"
           />
         </el-form-item>
         <el-alert v-if="err" :title="err" type="error" :closable="false" style="margin-bottom:14px" />
@@ -125,4 +125,24 @@ h1 { margin: 10px 0 4px; font-size: 34px; font-weight: 900; }
 .quote { margin-top: 20px; font-size: 12.5px; color: rgba(220, 228, 242, 0.9); line-height: 1.8; }
 .q-mark { color: var(--acc2); }
 .foot { position: absolute; bottom: 12px; z-index: 1; font-size: 12px; color: rgba(210, 220, 238, 0.75); }
+
+.login-page { display:grid; grid-template-columns:minmax(0,1fr) minmax(320px,440px); gap:64px; align-items:center; padding:64px 8%; background:rgba(0,0,0,.38) url('../assets/background.jpg') center / cover no-repeat fixed; background-blend-mode:multiply; }
+.login-intro { position:relative; z-index:1; align-self:stretch; display:flex; flex-direction:column; justify-content:center; color:#fff; }
+.login-eyebrow,.intro-bottom { font-size:12px; line-height:16px; letter-spacing:.16em; color:rgba(255,255,255,.8); }
+.login-intro h2 { margin:24px 0 16px; font-size:48px; line-height:1.15; font-weight:700; letter-spacing:-.03em; text-shadow:0 4px 32px rgba(0,0,0,.35); }
+.login-intro h2 span { color:#e6a8ca; }
+.login-intro p { margin:0; font-size:16px; line-height:24px; color:rgba(255,255,255,.85); }
+.intro-bottom { margin-top:64px; }.intro-bottom span { margin:0 8px; opacity:.5; }
+.login-card { width:100%; max-width:none; padding:40px; text-align:left; background:rgba(24,24,24,.84); border:1px solid rgba(255,255,255,.18); color:#fff; }
+.login-label { display:flex; align-items:center; gap:12px; color:#d5c4ea; font-size:12px; line-height:16px; letter-spacing:.12em; }
+.login-label .logo { margin:0; width:40px; height:40px; border-radius:8px; font-size:20px; font-weight:700; background:#7757b5; box-shadow:none; }
+.login-card h1 { margin:32px 0 8px; font-size:30px; line-height:36px; font-weight:700; color:#fff; }
+.slogan { margin:0 0 24px; font-size:14px; line-height:20px; }
+.login-card :deep(.el-input__wrapper) { min-height:48px; background:rgba(255,255,255,.08); box-shadow:0 0 0 1px rgba(255,255,255,.18) inset; }
+.login-card :deep(.el-input__inner) { color:#fff; }.login-card :deep(.el-input__inner::placeholder) { color:#bdb5c8; }
+.login-card :deep(.el-input__icon) { color:#c5bbce; }.go { height:48px; margin-top:8px; letter-spacing:.08em; border-radius:8px; }
+.quote { margin-top:24px; color:#cfc6d8; font-size:12px; line-height:20px; }
+.foot { bottom:24px; left:8%; font-size:12px; }
+@media(max-width:820px) { .login-page { grid-template-columns:1fr; gap:24px; padding:32px 24px 80px; }.login-intro { align-self:auto; }.login-intro h2 { font-size:30px; line-height:36px; margin:16px 0 8px; }.login-intro p { font-size:14px; line-height:20px; }.intro-bottom { display:none; }.login-card { max-width:480px; padding:24px; }.login-card h1 { margin-top:24px; }.foot { left:24px; } }
+
 </style>

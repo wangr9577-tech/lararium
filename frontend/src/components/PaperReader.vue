@@ -26,6 +26,7 @@
 
       <div class="rg">
         <span class="pgv">{{ curPage }} / {{ total }}</span>
+        <el-tooltip content="用本地模型生成论文摘要（需在设置中开启 AI 服务）" placement="top"><el-button size="small" @click="aiSummary" :loading="summarizing">AI 摘要</el-button></el-tooltip>
         <el-tooltip content="导出为笔记（存到笔记库）" placement="top"><el-button size="small" @click="exportNote">导出为笔记</el-button></el-tooltip>
         <el-tooltip content="下载摘录 md" placement="top"><el-button size="small" @click="exportMd">下载摘录</el-button></el-tooltip>
         <el-button size="small" @click="panelOpen = !panelOpen">{{ panelOpen ? '收起面板' : '标注/缩略图' }}</el-button>
@@ -399,6 +400,19 @@ function buildMd() {
   }
   return lines.join('\n')
 }
+
+/* ---------- AI 摘要（本地模型，M7） ---------- */
+const summarizing = ref(false)
+async function aiSummary() {
+  if (summarizing.value) return
+  summarizing.value = true
+  try {
+    const r = await http.post<{ ok: boolean; text?: string; reason?: string }>('/ai/summarize', { paper_id: props.paperId })
+    if (!r.ok) return ElMessage.warning(r.reason || 'AI 服务不可用')
+    ElMessageBox.alert(r.text || '', 'AI 摘要（本地模型生成，仅供速览）', { confirmButtonText: '知道了', width: '560px' })
+  } catch { ElMessage.warning('AI 服务不可用') } finally { summarizing.value = false }
+}
+
 async function exportNote() {
   if (!highlights.value.length) return ElMessage.warning('还没有标注')
   const md = buildMd()

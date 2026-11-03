@@ -60,7 +60,7 @@ def timeline(_user: dict = Depends(get_current)):
             "date": d["date"], "kind": "diary", "title": "日记",
             "ref": d["date"], "sub": d.get("mood", ""), "tag": [],
         })
-    # 申请里程碑（个人主页 me.milestones，时间以年份开头的纳入对应年份）
+    # 重要里程碑（个人主页 me.milestones，时间以年份开头的纳入对应年份）
     ms = (_load_settings().get("me.milestones") or [])
     for m in ms:
         time_s = str(m.get("time", ""))

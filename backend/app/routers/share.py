@@ -199,7 +199,7 @@ def _me_snapshot(cfg: dict) -> str:
                       + "</div>")
     ms = cfg.get("me.milestones") or []
     if ms:
-        inner += "<h4>申请里程碑</h4><div style='margin-top:8px'>"
+        inner += "<h4>重要里程碑</h4><div style='margin-top:8px'>"
         for m in ms:
             if not m.get("title"):
                 continue

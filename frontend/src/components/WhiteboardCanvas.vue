@@ -1,5 +1,11 @@
 <template>
-  <div class="wb" :class="{ readonly }">
+  <div
+    class="wb" :class="{ readonly }"
+    @dragenter.capture="onDragEnter"
+    @dragover.capture="onDragOver"
+    @dragleave.capture="onDragLeave"
+    @drop.capture="onDrop"
+  >
     <!-- 左侧竖排工具栏（只读预览不显示） -->
     <div v-if="!readonly" class="wb-rail">
       <div class="rg">
@@ -134,7 +140,7 @@
     <!-- 纸面区：连续长卷（多页垂直堆叠，原生滚动，可直接在任意页书写） -->
     <div class="wb-stage">
       <div
-        ref="scrollEl" class="wb-flow" :class="{ 'touch-draw': allowTouch }"
+        ref="scrollEl" class="wb-flow"
         @pointerdown="onDown" @pointermove="onMove" @pointerup="onUp" @pointercancel="onUp"
         @scroll.passive="onFlowScroll"
       >
@@ -142,12 +148,18 @@
           v-for="(pg, i) in pages" :key="i" class="wb-sheet" :class="{ cur: i === curIdx }"
           :style="sheetStyle(i)" :data-idx="i"
         >
-          <canvas :ref="(el: any) => setSheetEl(i, el as HTMLCanvasElement | null)" class="wb-canvas" />
+          <div v-if="LAYERED" class="wb-layers">
+            <canvas :ref="(el: any) => setLayerEl(i, 'static', el as HTMLCanvasElement | null)" class="wb-c" />
+            <canvas :ref="(el: any) => setLayerEl(i, 'ink', el as HTMLCanvasElement | null)" class="wb-c" />
+            <canvas v-if="!readonly" :ref="(el: any) => setLayerEl(i, 'live', el as HTMLCanvasElement | null)" class="wb-c" />
+          </div>
+          <canvas v-else :ref="(el: any) => setSheetEl(i, el as HTMLCanvasElement | null)" class="wb-canvas" />
           <div v-if="pages.length > 1" class="wb-pageno">{{ i + 1 }} / {{ pages.length }}</div>
           <div v-if="isEmptyPage(i) && !(i === curIdx && (drawing || cur.length > 1))" class="wb-hint">
             {{ readonly ? '这张纸还没有内容' : '在这页书写 · 上下滚动换页 · 可插图/粘贴图片' }}
           </div>
         </div>
+        <div v-if="dragOver && !readonly" class="wb-drop"><span>松开即在当前页插入图片</span></div>
       </div>
       <div v-if="readonly" class="wb-zoom">
         <button title="缩小" @click="zoomSheets(1 / 1.15)">−</button>
@@ -173,6 +185,12 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { getStroke } from 'perfect-freehand'
+import { USE_LAYERED_RENDERER, USE_WORKER_INK_REBUILD, newStrokeId, DPR_ACTIVE } from '../whiteboard/types'
+import { parsePayload as wbParsePayload, serialize as wbSerialize } from '../whiteboard/payload'
+import { StrokeBuffer } from '../whiteboard/input/StrokeBuffer'
+import { LiveInkRenderer, drawEraserRing, drawImgBox as wbDrawImgBox } from '../whiteboard/renderer/LiveInkRenderer'
+import { LayeredPageRenderer } from '../whiteboard/renderer/LayeredPageRenderer'
+import { InkPerfMonitor } from '../whiteboard/perf/InkPerfMonitor'
 
 /* ---------------- 类型与常量 ---------------- */
 
@@ -293,14 +311,16 @@ const imgLoadQueue = new Set<string>()
 
 let rafId = 0
 let lastKind: string = 'mouse'
-let penPressure = false
 let hoverPos: { x: number; y: number } | null = null
+/** 当前拥有书写/擦除手势的指针；避免其他指针误结束笔迹 */
+let inkPointerId: number | null = null
+let inkPointerType: string | null = null
 let ptrs = new Map<number, { x: number; y: number }>()
 let eraseBusy = false
 let eraseChanged = false
 let lastErase: { x: number; y: number } | null = null
-/** 双指滚动长卷时的基准 y（「手指书写」开启时用） */
-let touchPan: { y: number } | null = null
+/** 手指平移长卷时的上一个触点/双指中心 */
+let touchPan: { x: number; y: number } | null = null
 /** 双指捏合缩放：起始距离 / 起始 y / 起始缩放 */
 let twoFinger: { d: number; y: number; scale: number } | null = null
 /** 本次手势是否发生过缩放（结束时需要全量重绘） */
@@ -323,6 +343,21 @@ let sheetTops: number[] = []
 const painted = new Set<number>()
 let io: IntersectionObserver | null = null
 let scrollRaf = 0
+
+/* ---------------- 分层渲染（LAYERED）非响应式状态 ---------------- */
+
+const LAYERED = USE_LAYERED_RENDERER
+/** 每页分层画布（下标=页号）：static/ink 恒有；live 仅编辑模式（只读页不分配湿墨 backing） */
+const layerEls: { static: HTMLCanvasElement | null; ink: HTMLCanvasElement | null; live: HTMLCanvasElement | null }[] = []
+let renderer: LayeredPageRenderer | null = null
+let perf: InkPerfMonitor | null = null
+const liveInk = new LiveInkRenderer()
+const buffer = new StrokeBuffer()
+let lastInputTs = 0
+let resizeTimer = 0
+let overlayRaf = 0
+/** 拖拽/缩放中的图片 id（static 层重建时跳过它，避免旧位置重影） */
+let dragExcludeId: string | null = null
 
 /* ---------------- 视图与计算 ---------------- */
 
@@ -411,6 +446,12 @@ function layout(quick = false) {
   sheetW.value = Math.max(200, Math.round(flowWidth() * sheetScale.value))
   rebuildTops()
   syncActive()
+  if (LAYERED) {
+    // quick=true（捏合中）：只更新 CSS 尺寸，canvas 随 sheet 自动拉伸；结束后再重建 backing
+    if (quick) return
+    scheduleBackingRebuild()
+    return
+  }
   // quick=true：手势进行中只重绘活动页，保证跟手；手势结束后再全量重绘
   if (quick) refreshCanvas(false, true)
   else refreshCanvas(true)
@@ -421,6 +462,7 @@ function syncActive() {
   const el = sheetEls[curIdx.value]
   if (el) cv.value = el
   syncAmbient()
+  if (LAYERED) renderer?.setActiveIndex(curIdx.value)
 }
 
 /** 重绘：默认画可视区附近的页；activeOnly=true 只画活动页（书写中的高频路径） */
@@ -505,6 +547,8 @@ function makePage(w: number, h: number, paper?: { style: PaperStyle; color: Pape
 }
 
 function serialize(): string {
+  // LAYERED：写 v3（笔迹带稳定 id；旧版本读 v3 走 v2 分支并忽略新字段，双向兼容）
+  if (LAYERED) return wbSerialize(pages.value as any)
   return JSON.stringify({ v: 2, pages: pages.value } as { v: 2; pages: PageData[] })
 }
 
@@ -544,14 +588,21 @@ function parsePayload(raw: string): PageData[] | null {
 }
 
 function loadPayload(raw: string) {
-  const list = parsePayload(raw)
+  // LAYERED：用 whiteboard/payload 解析（为缺 id 的 v1/v2 笔迹补稳定 id，路径缓存键依赖 id）
+  const list = LAYERED ? wbParsePayload(raw) : parsePayload(raw)
   pages.value = list && list.length ? list : [makePage(RATIOS.v.w, RATIOS.v.h)]
   curIdx.value = 0
   clearHistory()
   selImg.value = null
   nextTick(() => {
     observeAll()
-    layout()
+    if (LAYERED) {
+      reRegisterAll()
+      layout(true)
+      rebuildVisibleBacking()
+    } else {
+      layout()
+    }
     scrollToSheet(0, false)
   })
 }
@@ -567,7 +618,8 @@ function setPaperStyle(st: PaperStyle) {
   if (!pg || pg.page.paper.style === st) return
   pg.page.paper.style = st
   pushPayload()
-  scheduleRedraw()
+  if (LAYERED) renderer?.paintStatic(curIdx.value)
+  else scheduleRedraw()
 }
 
 function setPaperColor(c: PaperColor) {
@@ -575,7 +627,8 @@ function setPaperColor(c: PaperColor) {
   if (!pg || pg.page.paper.color === c) return
   pg.page.paper.color = c
   pushPayload()
-  scheduleRedraw()
+  if (LAYERED) renderer?.paintStatic(curIdx.value)
+  else scheduleRedraw()
 }
 
 function setRatio(k: RatioKey) {
@@ -674,6 +727,7 @@ function addPage() {
   nextTick(() => {
     observeAll()
     layout()
+    if (LAYERED) reRegisterAll()
     goPage(last)
   })
 }
@@ -693,6 +747,11 @@ async function delPage() {
     observeAll()
     layout()
     scrollToSheet(curIdx.value)
+    if (LAYERED) {
+      renderer?.resetPages(pages.value.length)
+      reRegisterAll()
+      rebuildVisibleBacking()
+    }
   })
 }
 
@@ -712,6 +771,10 @@ function goPage(i: number, opts: { scroll?: boolean; smooth?: boolean } = {}) {
   imgOp = null
   hoverPos = null
   syncActive()
+  if (LAYERED) {
+    refreshPageFull(i)
+    scheduleOverlay()
+  }
   if (wantScroll) scrollToSheet(i, opts.smooth !== false)
 }
 
@@ -742,7 +805,30 @@ function observeAll() {
       if (en.isIntersecting) {
         painted.add(i)
         ensurePageImgs(i)
-        paint(i, i === curIdx.value)
+        if (LAYERED && renderer) {
+          const r = renderer
+          // 活动页定活动档（内部可能 resize 清层）；非活动页确保档位基准在 curIdx
+          if (i === curIdx.value) r.setActivePage(i)
+          else r.setActiveIndex(curIdx.value)
+          const w = sheetW.value
+          const h = pageCssH(i)
+          // matchSize 命中 ≠ backing 可用：release() 保留 css 尺寸但 backing 已置 1×1
+          const released = (layerEls[i]?.static?.width ?? 0) <= 1
+          if (!r.matchSize(i, w, h) || released) {
+            r.resizePage(i, w, h)
+            r.paintStatic(i)
+            if (USE_WORKER_INK_REBUILD && i !== curIdx.value && pages.value[i]?.strokes.length > 50) {
+              r.paintInkWorker(i).then((ok) => { if (!ok) r.paintInk(i) })
+            } else {
+              r.paintInk(i)
+            }
+          } else {
+            r.paintStatic(i)
+            r.paintInk(i)
+          }
+        } else {
+          paint(i, i === curIdx.value)
+        }
       } else if (i !== curIdx.value) {
         painted.delete(i)
         releaseSheet(i)
@@ -753,6 +839,11 @@ function observeAll() {
 }
 
 function releaseSheet(i: number) {
+  if (LAYERED) {
+    renderer?.release(i)
+    dropPageImgs(i)
+    return
+  }
   const c = sheetEls[i]
   if (c && i !== curIdx.value) {
     const ctx2d = c.getContext('2d')
@@ -785,6 +876,10 @@ function onFlowScroll() {
       hoverPos = null
       selImg.value = null
       syncActive()
+      if (LAYERED) {
+        refreshPageFull(best)
+        scheduleOverlay()
+      }
     }
   })
 }
@@ -817,6 +912,7 @@ function pushHist() {
 function applyHist(h: Hist) {
   const pg = pages.value[h.idx]
   if (!pg) return
+  let switched = false
   if (h.idx !== curIdx.value) {
     drawing.value = false
     eraseBusy = false
@@ -826,7 +922,11 @@ function applyHist(h: Hist) {
     curIdx.value = h.idx
     syncActive()
     scrollToSheet(h.idx)
+    switched = true
   }
+  // 应用前记录页固有尺寸（加宽/比例变更的快照还原后需要重建 backing）
+  const oldW = pg.page.w
+  const oldH = pg.page.h
   pg.strokes = h.s
   pg.images = h.im
   if (h.pw) pg.page.w = h.pw
@@ -834,7 +934,19 @@ function applyHist(h: Hist) {
   selImg.value = null
   pushPayload()
   rebuildTops()
-  paint(h.idx, true)
+  if (LAYERED && renderer) {
+    renderer.setActiveIndex(h.idx)
+    if ((h.pw && h.pw !== oldW) || (h.ph && h.ph !== oldH)) {
+      layout() // 页固有尺寸变化：防抖重建可见页 backing
+    } else if (switched) {
+      refreshPageFull(h.idx) // 跨页撤销：新活动页全量重建
+    } else {
+      renderer.paintInk(h.idx)
+    }
+    scheduleOverlay()
+  } else {
+    paint(h.idx, true)
+  }
 }
 
 function undo() {
@@ -951,7 +1063,12 @@ function ensurePageImgs(i: number) {
     el.onload = () => {
       imgCache.set(im.src, el)
       imgLoadQueue.delete(im.src)
-      paint(i, i === curIdx.value)
+      if (LAYERED) {
+        if (i === curIdx.value && dragExcludeId) renderer?.paintStatic(i, dragExcludeId)
+        else renderer?.paintStatic(i)
+      } else {
+        paint(i, i === curIdx.value)
+      }
     }
     el.onerror = () => imgLoadQueue.delete(im.src)
     el.src = im.src
@@ -1048,10 +1165,15 @@ function insertImageData(src: string, naturalW: number, naturalH: number) {
   selImg.value = img.id
   ensurePageImgs(curIdx.value)
   pushPayload()
-  scheduleRedraw()
+  if (LAYERED) {
+    renderer?.paintStatic(curIdx.value)
+    scheduleOverlay()
+  } else {
+    scheduleRedraw()
+  }
 }
 
-function insertImageFile(file: File, yOff = 0) {
+function insertImageFile(file: File, yOff = 0, at?: { fx: number; fy: number }) {
   if (!file || !/^image\//.test(file.type)) return
   const reader = new FileReader()
   reader.onload = () => {
@@ -1065,12 +1187,20 @@ function insertImageFile(file: File, yOff = 0) {
       const w = Math.max(0.15, Math.min(0.9, 0.85 / (aspect * r)))
       pushHist()
       const img: ImgEl = { id: 'img' + Date.now() + Math.floor(Math.random() * 999), x: (1 - w) / 2, y: 0, w, r, src }
-      img.y = Math.min(Math.max(0, (1 - (img.w * cssW * img.r) / cssH) / 2 + yOff), Math.max(0, 1 - (img.w * cssW * img.r) / cssH))
+      const imgH = (img.w * cssW * img.r) / cssH
+      if (at) img.x = Math.min(Math.max(0, at.fx - img.w / 2), Math.max(0, 1 - img.w)) // 图片以落点为中心
+      const baseY = at ? at.fy - imgH / 2 : (1 - imgH) / 2
+      img.y = Math.min(Math.max(0, baseY + yOff), Math.max(0, 1 - imgH))
       pg.images.push(img)
       selImg.value = img.id
       ensurePageImgs(curIdx.value)
       pushPayload()
-      scheduleRedraw()
+      if (LAYERED) {
+        renderer?.paintStatic(curIdx.value)
+        scheduleOverlay()
+      } else {
+        scheduleRedraw()
+      }
     }
     el.src = src
   }
@@ -1098,7 +1228,12 @@ function deleteSelImage() {
   pg.images = pg.images.filter((m) => m.id !== selImg.value)
   selImg.value = null
   pushPayload()
-  scheduleRedraw()
+  if (LAYERED) {
+    renderer?.paintStatic(curIdx.value)
+    scheduleOverlay()
+  } else {
+    scheduleRedraw()
+  }
 }
 
 function startImgOp(lx: number, ly: number, pointerId: number): boolean {
@@ -1108,7 +1243,14 @@ function startImgOp(lx: number, ly: number, pointerId: number): boolean {
   if (hi >= 0) {
     const im = selectedImg()!
     imgOp = { id: im.id, mode: 'resize', hi, sx: lx, sy: ly, ox: im.x, oy: im.y, ow: im.w }
-    try { cv.value?.setPointerCapture(pointerId) } catch { /* ignore */ }
+    try { captureEl()?.setPointerCapture(pointerId) } catch { /* ignore */ }
+    if (LAYERED) {
+      dragExcludeId = im.id
+      renderer?.paintStatic(curIdx.value, im.id)
+      scheduleOverlay()
+    } else {
+      scheduleRedraw()
+    }
     return true
   }
   const id = imgHitAt(lx, ly)
@@ -1116,8 +1258,14 @@ function startImgOp(lx: number, ly: number, pointerId: number): boolean {
     const im = pg.images.find((m) => m.id === id)!
     selImg.value = id
     imgOp = { id, mode: 'move', hi: -1, sx: lx, sy: ly, ox: im.x, oy: im.y, ow: im.w }
-    try { cv.value?.setPointerCapture(pointerId) } catch { /* ignore */ }
-    scheduleRedraw()
+    try { captureEl()?.setPointerCapture(pointerId) } catch { /* ignore */ }
+    if (LAYERED) {
+      dragExcludeId = id
+      renderer?.paintStatic(curIdx.value, id)
+      scheduleOverlay()
+    } else {
+      scheduleRedraw()
+    }
     return true
   }
   return false
@@ -1152,7 +1300,8 @@ function moveImgOp(lx: number, ly: number) {
     im.y = Math.min(Math.max(0, ypx / cssH), Math.max(0, 1 - hpx / cssH))
   }
   clampImg(im)
-  scheduleRedraw()
+  if (LAYERED) scheduleOverlay()
+  else scheduleRedraw()
 }
 
 /* ---------------- 主渲染 ---------------- */
@@ -1229,7 +1378,257 @@ function eraserR(): number {
 
 function scheduleRedraw() {
   if (rafId) return
-  rafId = requestAnimationFrame(() => { rafId = 0; redraw() })
+  rafId = requestAnimationFrame(() => { rafId = 0; if (LAYERED) liveFrame(); else redraw() })
+}
+
+/* ---------------- 分层渲染（LAYERED）：层管理 / 湿墨 / 覆盖层 ---------------- */
+
+/** 分层画布挂载：存元素；static+ink 齐备时向 renderer 注册该页
+ *  （重新注册会重置 runtime，调用方需随后 resize+paint 重建） */
+function setLayerEl(i: number, layer: 'static' | 'ink' | 'live', el: HTMLCanvasElement | null) {
+  if (!layerEls[i]) layerEls[i] = { static: null, ink: null, live: null }
+  layerEls[i][layer] = el
+  const s = layerEls[i]
+  if (s.static && s.ink) renderer?.registerPage(i, { static: s.static, ink: s.ink, live: s.live })
+}
+
+/** 全部页重新注册（页增删后；新页的 ref 回调通常已注册，这里兜底） */
+function reRegisterAll() {
+  for (let i = 0; i < pages.value.length; i++) {
+    const s = layerEls[i]
+    if (s && s.static && s.ink) renderer?.registerPage(i, { static: s.static, ink: s.ink, live: s.live })
+  }
+}
+
+/** 湿墨层 DPR 上限（活动页档位） */
+function liveDpr(): number {
+  return Math.min(window.devicePixelRatio || 1, DPR_ACTIVE)
+}
+
+/** 命中判定用元素（LAYERED 用 static 层；否则旧单画布） */
+function hitEl(i: number): HTMLCanvasElement | null {
+  return LAYERED ? (layerEls[i]?.static ?? null) : (sheetEls[i] ?? null)
+}
+
+/** setPointerCapture 目标（LAYERED 用长卷容器；否则活动页画布） */
+function captureEl(): Element | null {
+  return LAYERED ? (scrollEl.value ?? null) : (cv.value ?? null)
+}
+
+/** 该页三层全量重建：定级 → resize → 画。
+ *  注意 setActivePage 内部可能 resize 并清空层（renderer 契约：调用后调用方必须重渲染），
+ *  因此必须放在 paint 之前 */
+function refreshPageFull(i: number) {
+  if (!renderer) return
+  if (i === curIdx.value) renderer.setActivePage(i)
+  renderer.resizePage(i, sheetW.value, pageCssH(i))
+  renderer.paintStatic(i)
+  renderer.paintInk(i)
+}
+
+/** 重建可见页 backing（活动页优先）。
+ *  matchSize 命中只避免重复分配 backing；backing 有效与否都要重画两层
+ *  （resizePage / setActivePage 的清层副作用）。release() 只置 1×1 backing 不改
+ *  css 尺寸，故 matchSize 命中不代表 backing 可用，需要时重新 resizePage */
+function rebuildVisibleBacking() {
+  if (!renderer) return
+  renderer.setActiveIndex(curIdx.value)
+  const order = [curIdx.value, ...visibleIdx().filter((x) => x !== curIdx.value)]
+  for (const i of order) {
+    if (i === curIdx.value) renderer.setActivePage(i)
+    if (!renderer.matchSize(i, sheetW.value, pageCssH(i))) renderer.resizePage(i, sheetW.value, pageCssH(i))
+    renderer.paintStatic(i)
+    renderer.paintInk(i)
+  }
+  perf?.noteBackings(renderer.backingEstimate())
+}
+
+/** 防抖 backing 重建：手势/滚轮高频缩放期间只改 CSS，结束后再重建 */
+function scheduleBackingRebuild(delay = 150) {
+  if (resizeTimer) clearTimeout(resizeTimer)
+  resizeTimer = window.setTimeout(() => {
+    resizeTimer = 0
+    rebuildVisibleBacking()
+  }, delay)
+}
+
+/** 一帧湿墨（scheduleRedraw 的 LAYERED 高频路径；LiveInkRenderer 内部每帧至多一次 getStroke） */
+function liveFrame() {
+  const m = liveInk.flushFrame(pages.value[curIdx.value]?.strokes.length ?? 0, lastInputTs)
+  if (m) perf?.noteFrame(m)
+}
+
+function scheduleOverlay() {
+  if (overlayRaf) return
+  overlayRaf = requestAnimationFrame(() => {
+    overlayRaf = 0
+    drawLiveOverlay()
+  })
+}
+
+/** 覆盖层（LAYERED）：图片拖拽/缩放预览 → 橡皮悬停圈 → 图片选中框。
+ *  drawing.value 为 true 时直接返回（绝不能清湿墨） */
+function drawLiveOverlay() {
+  if (drawing.value) return
+  const i = curIdx.value
+  const canvas = layerEls[i]?.live
+  const pg = pages.value[i]
+  const w = sheetW.value
+  const h = pageCssH(i)
+  if (!canvas || !pg || w <= 0 || h <= 0) return
+  const ctx2d = canvas.getContext('2d')
+  if (!ctx2d) return
+  const dpr = liveDpr()
+  const bw = Math.round(w * dpr)
+  const bh = Math.round(h * dpr)
+  if (canvas.width !== bw || canvas.height !== bh) {
+    canvas.width = bw
+    canvas.height = bh
+  }
+  ctx2d.setTransform(dpr, 0, 0, dpr, 0, 0)
+  ctx2d.clearRect(0, 0, w, h)
+  if (imgOp) {
+    const im = pg.images.find((m) => m.id === imgOp!.id)
+    if (im) {
+      const el = imgCache.get(im.src)
+      if (el && el.complete && el.naturalWidth > 0) {
+        const iw = im.w * w
+        ctx2d.drawImage(el, im.x * w, im.y * h, iw, iw * im.r)
+      }
+      wbDrawImgBox(ctx2d, im, w, h, true)
+    }
+    return
+  }
+  if (tool.value === 'eraser' && hoverPos && !eraseBusy) {
+    drawEraserRing(canvas, dpr, hoverPos.x, hoverPos.y, eraserR())
+    return
+  }
+  if (tool.value === 'select' && selImg.value) {
+    const im = pg.images.find((m) => m.id === selImg.value)
+    if (im) wbDrawImgBox(ctx2d, im, w, h, true)
+  }
+}
+
+/** 打断当前书写手势（双指落下 / 触控笔落下时清触摸笔迹） */
+function abortInkGesture() {
+  if (!drawing.value) return
+  drawing.value = false
+  cur.value = []
+  if (LAYERED) {
+    buffer.reset()
+    liveInk.clearAll()
+    liveInk.end()
+  }
+  scheduleRedraw()
+}
+
+/** LAYERED 落笔：StrokeBuffer 起笔 + 湿墨层 begin（backing 与 CSS 尺寸不一致先重建） */
+function beginInkStroke(p: { x: number; y: number }, pressure: number, kind: string) {
+  if (!LAYERED || !renderer) return
+  const i = curIdx.value
+  const w = sheetW.value
+  const h = pageCssH(i)
+  const pg = pages.value[i]
+  if (!pg || !layerEls[i]?.live) return
+  // setActivePage 可能内部 resize 并清空层（renderer 契约）→ 其后两层必须重画
+  renderer.setActivePage(i)
+  if (!renderer.matchSize(i, w, h)) renderer.resizePage(i, w, h)
+  renderer.paintStatic(i)
+  renderer.paintInk(i)
+  lastKind = kind
+  buffer.begin(p.x / w, p.y / h, pressure)
+  liveInk.begin(
+    { tool: tool.value, color: color.value, w: widthFrac(), tip: tool.value === 'pen' ? tipKey.value : undefined, sp: tool.value === 'pen' && lastKind !== 'pen' },
+    pg as any, layerEls[i].live, w, h, liveDpr(),
+  )
+  lastInputTs = performance.now()
+  perf?.noteInput(lastInputTs)
+  drawing.value = true
+}
+
+/** LAYERED 移动加点：归一化采样进 buffer + 湿墨层（<1px 去抖） */
+function pushInkPoint(p: { x: number; y: number }, pressure: number) {
+  if (!LAYERED) return
+  const i = curIdx.value
+  const w = sheetW.value
+  const h = pageCssH(i)
+  const last = buffer.last()
+  if (last && Math.hypot(p.x - last.x * w, p.y - last.y * h) < 1) return
+  const nx = p.x / w
+  const ny = p.y / h
+  buffer.push(nx, ny, pressure)
+  liveInk.push(nx, ny, pressure)
+  lastInputTs = performance.now()
+  perf?.noteInput(lastInputTs)
+  followPen(p.y)
+  scheduleRedraw()
+}
+
+/** LAYERED 落笔提交：构建带 id 的 v3 笔迹 → 增量提交 ink 层 → 清湿墨层 */
+function commitInkStroke() {
+  drawing.value = false
+  const pg = curPage.value
+  if (!pg || buffer.length < 2) {
+    buffer.reset()
+    liveInk.clearAll()
+    liveInk.end()
+    return
+  }
+  pushHist()
+  const stroke: any = {
+    id: newStrokeId(),
+    tool: tool.value,
+    color: color.value,
+    tip: tool.value === 'pen' ? tipKey.value : undefined,
+    sp: tool.value === 'pen' && lastKind !== 'pen',
+    w: widthFrac(),
+    pts: buffer.toSamples().map((s) => ({ ...s, x: Math.round(s.x * 10000) / 10000, y: Math.round(s.y * 10000) / 10000, p: Math.round(s.p * 100) / 100 })),
+  }
+  buffer.reset()
+  pg.strokes.push(stroke)
+  pushPayload()
+  renderer?.commitStroke(curIdx.value, stroke)
+  liveInk.clearAll()
+  liveInk.end()
+}
+
+/** 开发态测试钩子：确定性生成 n 条随机游走笔迹（性能基线测量用；仅 DEV 生效） */
+function fillDevStrokes(n: number, pageIdx = 0) {
+  if (!import.meta.env.DEV) return
+  const pg = pages.value[pageIdx]
+  if (!pg) return
+  let seed = 42
+  const rnd = () => {
+    seed = (seed * 1664525 + 1013904223) >>> 0
+    return seed / 4294967296
+  }
+  for (let k = 0; k < n; k++) {
+    const count = 40 + Math.floor(rnd() * 81)
+    const pts: { x: number; y: number; p: number }[] = []
+    let x = 0.03 + rnd() * 0.94
+    let y = 0.03 + rnd() * 0.94
+    const p0 = Math.round((0.4 + rnd() * 0.6) * 100) / 100
+    for (let j = 0; j < count; j++) {
+      x = Math.min(0.97, Math.max(0.03, x + (rnd() - 0.5) * 0.08))
+      y = Math.min(0.97, Math.max(0.03, y + (rnd() - 0.5) * 0.08))
+      pts.push({ x: Math.round(x * 10000) / 10000, y: Math.round(y * 10000) / 10000, p: p0 })
+    }
+    pg.strokes.push({
+      id: newStrokeId(),
+      tool: 'pen',
+      color: PEN_COLORS[k % PEN_COLORS.length],
+      w: 0.0026,
+      tip: 'pen',
+      pts,
+    } as any)
+  }
+  pushPayload()
+  if (LAYERED) {
+    renderer?.invalidatePage(pageIdx)
+    renderer?.paintInk(pageIdx)
+  } else {
+    paint(pageIdx, true)
+  }
 }
 
 /* ---------------- 指针：坐标与事件分派 ---------------- */
@@ -1252,7 +1651,7 @@ function canvasLocal(clientX: number, clientY: number, activate = false): { x: n
   if (activate && idx !== curIdx.value && !drawing.value && !eraseBusy) {
     goPage(idx, { scroll: false })
   }
-  const el = sheetEls[curIdx.value] ?? sheetEls[idx]
+  const el = hitEl(curIdx.value) ?? hitEl(idx)
   if (!el) return { x: 0, y: 0 }
   const r = el.getBoundingClientRect()
   return { x: clientX - r.left, y: clientY - r.top }
@@ -1264,12 +1663,30 @@ function toLocal(e: PointerEvent): { x: number; y: number } {
 
 function onDown(e: PointerEvent) {
   if (e.pointerType === 'mouse' && e.button !== 0) return
-  // 触摸：单指在只读页交给浏览器原生滚动；双指手势（捏合缩放 / 滚动）只读与编辑都支持
+  // 所有直接触摸手势均由白板接管：这样浏览器不会把触控笔书写取消为原生滚动。
   if (e.pointerType === 'touch') {
     onTouchDown(e)
     return
   }
   if (props.readonly) return
+
+  if (e.pointerType === 'pen') {
+    e.preventDefault()
+    // 触控笔优先：清掉仍在屏幕上的手指/掌触状态，后续 touch 事件在落笔期间会被忽略。
+    if (inkPointerType === 'touch') {
+      if (drawing.value) {
+        abortInkGesture()
+      } else if (eraseBusy) {
+        endEraseGesture()
+      }
+      inkPointerId = null
+      inkPointerType = null
+    }
+    ptrs.clear()
+    touchPan = null
+    twoFinger = null
+  }
+
   const p = canvasLocal(e.clientX, e.clientY, true)
   // 选择工具：优先处理图片（命中即进入拖拽/缩放）
   if (tool.value === 'select') {
@@ -1278,28 +1695,37 @@ function onDown(e: PointerEvent) {
     scheduleRedraw()
     return
   }
-  if (e.pointerType === 'pen' && e.isPrimary === false) return
+  if (inkPointerId !== null && inkPointerId !== e.pointerId) return
   lastKind = e.pointerType
-  penPressure = e.pointerType === 'pen' && (e.pressure || 0) > 0
+  inkPointerId = e.pointerId
+  inkPointerType = e.pointerType || 'mouse'
+  try { scrollEl.value?.setPointerCapture(e.pointerId) } catch { /* ignore */ }
   if (tool.value === 'eraser') {
-    try { cv.value?.setPointerCapture(e.pointerId) } catch { /* ignore */ }
     beginEraseGesture(p)
     return
   }
-  try { cv.value?.setPointerCapture(e.pointerId) } catch { /* ignore */ }
+  if (LAYERED) {
+    hoverPos = null
+    beginInkStroke(p, e.pressure && e.pointerType === 'pen' ? e.pressure : 0.5, e.pointerType || 'mouse')
+    return
+  }
   drawing.value = true
   cur.value = [{ x: p.x, y: p.y, p: e.pressure && e.pointerType === 'pen' ? e.pressure : 0.5 }]
   hoverPos = null
 }
 
-/** 手指：捏合缩放 / 滚动 / 书写（选择工具的图片操作已在 onDown 处理） */
+/** 手指：默认单指平移、双指平移缩放；开启「手指书写」后单指书写 */
 function onTouchDown(e: PointerEvent) {
   const wrap = scrollEl.value
   if (!wrap) return
+  e.preventDefault()
+  // 触控笔落下期间的触摸通常是手掌，不能让它打断笔迹。
+  if (inkPointerType === 'pen') return
   const p = { x: e.clientX, y: e.clientY }
   ptrs.set(e.pointerId, p)
+  try { wrap.setPointerCapture(e.pointerId) } catch { /* ignore */ }
 
-  // 双指：捏合缩放 + 平移滚动（只读/编辑都支持；「手指书写」开启时也靠它滚动）
+  // 双指：捏合缩放 + 平移滚动。若第一指正在书写，则放弃未完成笔迹。
   if (ptrs.size >= 2) {
     const list = [...ptrs.values()]
     twoFinger = {
@@ -1307,27 +1733,40 @@ function onTouchDown(e: PointerEvent) {
       y: avgTouchY(),
       scale: sheetScale.value,
     }
-    touchPan = { y: avgTouchY() }
-    if (drawing.value) {
-      drawing.value = false
-      cur.value = []
-      scheduleRedraw()
+    touchPan = {
+      x: list.reduce((a, b) => a + b.x, 0) / list.length,
+      y: avgTouchY(),
     }
-    cancelEraseGesture(false)
+    if (inkPointerType === 'touch' && drawing.value) {
+      abortInkGesture()
+    } else if (inkPointerType === 'touch' && eraseBusy) {
+      endEraseGesture()
+    }
+    if (inkPointerType === 'touch') {
+      inkPointerId = null
+      inkPointerType = null
+    }
     return
   }
 
-  // 单指只读：交给浏览器原生滚动
-  if (props.readonly) return
-  const lp = canvasLocal(e.clientX, e.clientY, true)
-  // 单指编辑：默认不接管（原生滚动）；仅开启「手指书写」时接管为书写/擦除
+  // 默认单指平移；只读、选择工具也始终平移。
   const wantInk = allowTouch.value && ptrs.size === 1 && tool.value !== 'select'
-  if (!wantInk || drawing.value) return
-  try { wrap.setPointerCapture(e.pointerId) } catch { /* ignore */ }
+  if (props.readonly || !wantInk) {
+    touchPan = p
+    return
+  }
+  if (drawing.value || eraseBusy || inkPointerId !== null) return
+  const lp = canvasLocal(e.clientX, e.clientY, true)
   lastKind = 'touch'
-  penPressure = false
+  inkPointerId = e.pointerId
+  inkPointerType = 'touch'
   if (tool.value === 'eraser') {
     beginEraseGesture(lp)
+    return
+  }
+  if (LAYERED) {
+    hoverPos = null
+    beginInkStroke(lp, 0.5, 'touch')
     return
   }
   drawing.value = true
@@ -1347,6 +1786,7 @@ function onMove(e: PointerEvent) {
     return
   }
   if (props.readonly) return
+  if (inkPointerId !== null && e.pointerId !== inkPointerId) return
   const lp = canvasLocal(e.clientX, e.clientY)
   if (imgOp) {
     moveImgOp(lp.x, lp.y)
@@ -1359,11 +1799,16 @@ function onMove(e: PointerEvent) {
       lastErase = p
     } else {
       hoverPos = p
-      redraw()
+      if (LAYERED) scheduleOverlay()
+      else redraw()
     }
     return
   }
   if (!drawing.value) return
+  if (LAYERED) {
+    pushInkPoint(p, e.pressure && e.pointerType === 'pen' ? e.pressure : 0.5)
+    return
+  }
   const pts = cur.value
   const last = pts[pts.length - 1]
   const d = Math.hypot(p.x - last.x, p.y - last.y)
@@ -1374,13 +1819,16 @@ function onMove(e: PointerEvent) {
 }
 
 function onTouchMove(e: PointerEvent) {
+  if (!ptrs.has(e.pointerId)) return
+  e.preventDefault()
   const p = { x: e.clientX, y: e.clientY }
-  if (ptrs.has(e.pointerId)) ptrs.set(e.pointerId, p)
+  ptrs.set(e.pointerId, p)
 
   // 双指：捏合缩放 + 平移滚动
   if (ptrs.size >= 2 && twoFinger) {
     const list = [...ptrs.values()]
     const d = Math.max(1, Math.hypot(list[0].x - list[1].x, list[0].y - list[1].y))
+    const x = list.reduce((a, b) => a + b.x, 0) / list.length
     const y = list.reduce((a, b) => a + b.y, 0) / list.length
     const next = Math.min(3, Math.max(0.4, twoFinger.scale * (d / twoFinger.d)))
     if (Math.abs(next - sheetScale.value) > 0.005) {
@@ -1401,78 +1849,110 @@ function onTouchMove(e: PointerEvent) {
     }
     if (touchPan) {
       const wrap = scrollEl.value
-      if (wrap) wrap.scrollTop -= (y - touchPan.y)
+      if (wrap) {
+        wrap.scrollLeft -= (x - touchPan.x)
+        wrap.scrollTop -= (y - touchPan.y)
+      }
+      touchPan.x = x
       touchPan.y = y
     }
     return
   }
 
-  if ((drawing.value || eraseBusy) && ptrs.size === 1) {
+  if (inkPointerId === e.pointerId && inkPointerType === 'touch' && (drawing.value || eraseBusy) && ptrs.size === 1) {
     const lp = canvasLocal(e.clientX, e.clientY)
     if (tool.value === 'eraser' && eraseBusy && lastErase) {
       applyEraseSegment(lastErase, lp)
       lastErase = lp
     } else if (drawing.value && tool.value !== 'eraser' && tool.value !== 'select') {
-      const pts = cur.value
-      const last = pts[pts.length - 1]
-      if (Math.hypot(lp.x - last.x, lp.y - last.y) >= 1) {
-        pts.push({ x: lp.x, y: lp.y, p: 0.5 })
-        scheduleRedraw()
+      if (LAYERED) {
+        pushInkPoint(lp, 0.5)
+      } else {
+        const pts = cur.value
+        const last = pts[pts.length - 1]
+        if (Math.hypot(lp.x - last.x, lp.y - last.y) >= 1) {
+          pts.push({ x: lp.x, y: lp.y, p: 0.5 })
+          scheduleRedraw()
+        }
       }
     }
     return
   }
-  // 连续长卷：非书写状态一律交给浏览器原生滚动（不再自定义平移/翻页）
+  // touch-action:none 下由白板实现单指双向平移，避免浏览器抢走触控笔事件。
+  if (ptrs.size === 1 && touchPan) {
+    const wrap = scrollEl.value
+    if (wrap) {
+      wrap.scrollLeft -= (p.x - touchPan.x)
+      wrap.scrollTop -= (p.y - touchPan.y)
+    }
+    touchPan = p
+  }
 }
-
-/* 连续长卷：单指平移/边界翻页已由浏览器原生滚动取代（见 .wb-flow 的 touch-action） */
 
 function onUp(e: PointerEvent) {
   // 触摸先处理（只读页也要正确收尾双指手势）
   if (e.pointerType === 'touch') {
+    if (!ptrs.has(e.pointerId)) return
+    e.preventDefault()
+    const wasInk = inkPointerId === e.pointerId && inkPointerType === 'touch'
     ptrs.delete(e.pointerId)
+    try { scrollEl.value?.releasePointerCapture(e.pointerId) } catch { /* ignore */ }
+    if (wasInk) {
+      if (drawing.value) finishInkStroke()
+      else if (eraseBusy) endEraseGesture()
+      inkPointerId = null
+      inkPointerType = null
+    }
     if (ptrs.size === 0) {
       touchPan = null
       twoFinger = null
-      if (drawing.value) finishInkStroke()
-      else if (eraseBusy) endEraseGesture()
       if (gestureZoomed) {
         gestureZoomed = false
-        layout() // 手势结束：全量重绘可视页
+        if (LAYERED) rebuildVisibleBacking() // 手势结束：按最终 CSS 尺寸立即重建 backing
+        else layout() // 手势结束：全量重绘可视页
       }
     } else if (ptrs.size === 1) {
-      touchPan = null
       twoFinger = null
+      const rest = [...ptrs.values()][0]
+      touchPan = { x: rest.x, y: rest.y }
     }
     return
   }
   if (props.readonly) return
+  if (inkPointerId !== null && e.pointerId !== inkPointerId) return
   // 图片操作收尾
   if (imgOp) {
     imgOp = null
     pushPayload()
-    return
-  }
-  if (e.pointerType === 'touch') {
-    ptrs.delete(e.pointerId)
-    if (ptrs.size === 0) {
-      touchPan = null
-      if (drawing.value) finishInkStroke()
-      else if (eraseBusy) endEraseGesture()
-    } else if (ptrs.size === 1) {
-      touchPan = null
+    if (LAYERED) {
+      dragExcludeId = null
+      renderer?.paintStatic(curIdx.value)
+      scheduleOverlay()
     }
     return
   }
   if (tool.value === 'eraser') {
     if (eraseBusy) endEraseGesture()
-    else { hoverPos = null; redraw() }
-    return
+    else {
+      hoverPos = null
+      if (LAYERED) scheduleOverlay()
+      else redraw()
+    }
+  } else if (drawing.value) {
+    finishInkStroke()
   }
-  if (drawing.value) finishInkStroke()
+  if (inkPointerId === e.pointerId) {
+    inkPointerId = null
+    inkPointerType = null
+    try { scrollEl.value?.releasePointerCapture(e.pointerId) } catch { /* ignore */ }
+  }
 }
 
 function finishInkStroke() {
+  if (LAYERED) {
+    commitInkStroke()
+    return
+  }
   drawing.value = false
   const pts = cur.value
   cur.value = []
@@ -1495,7 +1975,7 @@ function finishInkStroke() {
 /** 笔尖接近长卷可视底部时自动上滚（连续书写无需手动翻页） */
 function followPen(localY: number) {
   const wrap = scrollEl.value
-  const el = sheetEls[curIdx.value]
+  const el = hitEl(curIdx.value)
   if (!wrap || !el) return
   const r = el.getBoundingClientRect()
   const wr = wrap.getBoundingClientRect()
@@ -1527,7 +2007,8 @@ function endEraseGesture() {
   hoverPos = null
   if (eraseChanged) {
     pushPayload()
-    redraw()
+    if (LAYERED) scheduleOverlay()
+    else redraw()
   } else {
     undoStack.pop() // 没擦到任何东西：撤销快照
   }
@@ -1550,7 +2031,12 @@ function applyEraseSegment(a: { x: number; y: number }, b: { x: number; y: numbe
   if (!changed) return
   pg.strokes = next
   eraseChanged = true
-  scheduleRedraw()
+  if (LAYERED) {
+    renderer?.invalidatePage(curIdx.value)
+    renderer?.paintInk(curIdx.value)
+  } else {
+    scheduleRedraw()
+  }
 }
 
 function totalPts(list: Stroke[]): number {
@@ -1641,7 +2127,14 @@ function clearAll() {
       pg.images = []
       selImg.value = null
       pushPayload()
-      scheduleRedraw()
+      if (LAYERED) {
+        renderer?.invalidatePage(curIdx.value)
+        renderer?.paintStatic(curIdx.value)
+        renderer?.paintInk(curIdx.value)
+        scheduleOverlay()
+      } else {
+        scheduleRedraw()
+      }
     })
     .catch(() => {})
 }
@@ -1655,6 +2148,7 @@ function pickTool(t: Tool) {
     color.value = PEN_COLORS[0]
   }
   if (t !== 'select') selImg.value = null
+  if (LAYERED) scheduleOverlay()
 }
 
 function openPicker() {
@@ -1687,6 +2181,52 @@ function onPaste(e: ClipboardEvent) {
   }
 }
 
+/* ---------------- 拖入图片（从桌面/网页把图片拖到纸面） ---------------- */
+const dragOver = ref(false)
+let wbDragDepth = 0
+
+/** 拖拽里是否含文件（白板内元素拖拽不含 Files，需要放行） */
+function hasDropFiles(e: DragEvent): boolean {
+  return !!e.dataTransfer && Array.from(e.dataTransfer.types || []).includes('Files')
+}
+function onDragEnter(e: DragEvent) {
+  if (props.readonly || !hasDropFiles(e)) return
+  wbDragDepth++
+  dragOver.value = true
+}
+function onDragOver(e: DragEvent) {
+  if (props.readonly || !hasDropFiles(e)) return
+  e.preventDefault() // 不 preventDefault 不会触发 drop
+  if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy'
+  dragOver.value = true
+}
+function onDragLeave() {
+  wbDragDepth = Math.max(0, wbDragDepth - 1)
+  if (!wbDragDepth) dragOver.value = false
+}
+/** 松开：把图片插到落点所在页、以落点为中心（多张向下错开 0.05，与「插图」按钮一致） */
+function onDrop(e: DragEvent) {
+  wbDragDepth = 0
+  dragOver.value = false
+  if (props.readonly || !hasDropFiles(e)) return
+  const el = e.target as HTMLElement
+  if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) return // 输入框内不接管
+  e.preventDefault()
+  e.stopPropagation()
+  const files = Array.from(e.dataTransfer?.files || []).filter((f) => /^image\//.test(f.type))
+  if (!files.length) {
+    ElMessage.warning('仅支持图片（jpg / png / webp / gif）')
+    return
+  }
+  // 落点 → 该页的宽高比例坐标：hitEl(命中页) 的 rect 与 canvasLocal 用的是同一基准
+  const idx = sheetAt(e.clientY)
+  const hit = hitEl(idx)
+  const rect = hit ? hit.getBoundingClientRect() : null
+  const lp = canvasLocal(e.clientX, e.clientY, true) // activate=true：点哪页就插到哪页
+  const at = rect && rect.width > 0 && rect.height > 0 ? { fx: lp.x / rect.width, fy: lp.y / rect.height } : undefined
+  files.forEach((f, i) => insertImageFile(f, i * 0.05, at))
+}
+
 function onKey(e: KeyboardEvent) {
   if (props.readonly) return
   const el = e.target as HTMLElement
@@ -1712,6 +2252,11 @@ function onWheel(e: WheelEvent) {
 /* ---------------- 导出 PNG（当前页 / 指定页） ---------------- */
 
 function renderPng(pageIdx?: number): string {
+  // LAYERED：走 renderer 独立离屏导出（页面固有坐标 + scale，不受屏幕 DPR 定级影响）
+  if (LAYERED && renderer) {
+    const pg = pageIdx === undefined ? curPage.value : pages.value[pageIdx]
+    if (pg) return renderer.renderPngFromCache(pg, 2)
+  }
   const pg = pageIdx === undefined ? curPage.value : pages.value[pageIdx]
   if (!pg) return ''
   const s = 2
@@ -1731,11 +2276,21 @@ function renderPng(pageIdx?: number): string {
   return out.toDataURL('image/png')
 }
 
-defineExpose({ renderPng })
+defineExpose({ renderPng, fillDevStrokes })
 
 /* ---------------- 生命周期 ---------------- */
 
 onMounted(() => {
+  perf = new InkPerfMonitor(import.meta.env.DEV)
+  if (LAYERED) {
+    renderer = new LayeredPageRenderer({
+      getPages: () => pages.value as any,
+      readonly: props.readonly,
+      getImg: (src) => imgCache.get(src) ?? null,
+      worker: USE_WORKER_INK_REBUILD,
+      perf,
+    })
+  }
   loadPayload(props.modelValue)
   window.addEventListener('resize', layout)
   window.addEventListener('keydown', onKey)
@@ -1744,6 +2299,10 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  perf?.dispose()
+  renderer?.dispose()
+  if (resizeTimer) clearTimeout(resizeTimer)
+  if (overlayRaf) cancelAnimationFrame(overlayRaf)
   if (rafId) cancelAnimationFrame(rafId)
   if (scrollRaf) cancelAnimationFrame(scrollRaf)
   io?.disconnect()
@@ -1838,20 +2397,27 @@ html.theme-dark .wb-zoom { background: rgba(24, 29, 44, 0.94); }
   position: relative; flex: 1; min-height: 360px;
   max-height: calc(100vh - 150px);
   overflow: auto; overscroll-behavior: contain;
-  /* 手指/触控板：横向+纵向都可滚动（加宽/放大后需要左右移动查看空白区）；
-     捏合缩放由 JS 自行处理，故不允许浏览器缩放 */
-  touch-action: pan-x pan-y;
+  /* 直接触摸全部交给 Pointer Events：笔写、单指平移、双指缩放才能可靠区分。
+     鼠标滚轮和触控板滚动不受 touch-action 影响。 */
+  touch-action: none;
   padding: 12px;
   border-radius: 14px; background: rgba(148, 163, 184, 0.08);
   scrollbar-width: thin;
 }
+/* 拖入图片提示浮层（覆盖纸面区域） */
+.wb-drop {
+  position: absolute; inset: 8px; z-index: 30; border-radius: 14px;
+  display: grid; place-items: center; pointer-events: none;
+  border: 2px dashed rgba(167, 139, 250, 0.75);
+  background: rgba(167, 139, 250, 0.1);
+  color: var(--txt1); font-weight: 700; font-size: 15px;
+}
+html.theme-dark .wb-drop { background: rgba(139, 92, 246, 0.18); color: #e6ecf7; }
 .wb-flow::-webkit-scrollbar { width: 10px; height: 10px; }
 .wb-flow::-webkit-scrollbar-thumb {
   background: rgba(148, 163, 184, 0.45); border-radius: 999px;
 }
 .wb-flow::-webkit-scrollbar-track { background: transparent; }
-.wb-flow.touch-draw,
-.wb-flow.touch-draw .wb-canvas { touch-action: none; }
 .wb.readonly .wb-flow {
   max-height: calc(100vh - 150px); min-height: 320px;
   background: rgba(148, 163, 184, 0.06);
@@ -1865,11 +2431,13 @@ html.theme-dark .wb-zoom { background: rgba(24, 29, 44, 0.94); }
 .wb.readonly .wb-sheet { box-shadow: 0 4px 18px rgba(30, 20, 80, 0.16); }
 .wb-canvas {
   display: block; border-radius: 8px;
-  /* 关键：画布铺满整页，必须允许纵向+横向触摸滚动（否则手指落在纸面上无法下滑/左右移动）
-     触控笔书写不受 touch-action 影响；开启「手指书写」时由 .touch-draw 接管为 none */
-  touch-action: pan-x pan-y; cursor: crosshair;
+  touch-action: none; cursor: crosshair;
 }
 .wb.readonly .wb-canvas { cursor: default; }
+/* 分层渲染（LAYERED）：三层 canvas 绝对定位叠满 sheet，CSS 尺寸 100% 随 sheet 拉伸 */
+.wb-layers { position: absolute; inset: 0; cursor: crosshair; touch-action: none; }
+.wb.readonly .wb-layers { cursor: default; }
+.wb-layers .wb-c { position: absolute; inset: 0; width: 100%; height: 100%; }
 .wb-pageno {
   position: absolute; right: 8px; bottom: 6px; z-index: 2; pointer-events: none;
   font-size: 11px; color: #94a3b8; background: rgba(255, 255, 255, 0.78);
