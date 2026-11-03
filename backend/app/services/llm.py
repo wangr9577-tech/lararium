@@ -43,14 +43,14 @@ def _settings_ai() -> dict:
 
 DEFAULT_PROFILES = [
     {
-        "id": "xmu-qwen",
-        "name": "XMU-Qwen (HPC 隧道)",
-        "provider": "xmu-qwen",
-        "endpoint": "http://127.0.0.1:18081/v1",
-        "model": "qwen3.8-flash-next-unsloth-ud-q4_k_xl",
+        "id": "local-ollama",
+        "name": "Local Ollama (默认)",
+        "provider": "ollama",
+        "endpoint": "http://127.0.0.1:11434/v1",
+        "model": "qwen2.5:7b",
         "api_key": "unused",
-        "timeout": 120,
-        "tunnel_hint": "ssh -N -L 127.0.0.1:18081:127.0.0.1:8080 xmu-hpc",
+        "timeout": 60,
+        "tunnel_hint": "",
     },
     {
         "id": "local-vllm",

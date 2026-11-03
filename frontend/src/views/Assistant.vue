@@ -399,9 +399,9 @@
     <el-dialog v-model="diagDialogVisible" title="大模型服务连通性与隧道诊断" width="540px" append-to-body>
       <div v-loading="diagLoading" class="diag-dialog-body">
         <el-descriptions :column="1" border size="small">
-          <el-descriptions-item label="模型提供商">{{ diagState.provider || 'xmu-qwen' }}</el-descriptions-item>
-          <el-descriptions-item label="模型名称">{{ diagState.model || 'qwen3.8-flash-next-unsloth-ud-q4_k_xl' }}</el-descriptions-item>
-          <el-descriptions-item label="服务端点">{{ diagState.endpoint || 'http://127.0.0.1:18081/v1' }}</el-descriptions-item>
+          <el-descriptions-item label="模型提供商">{{ diagState.provider || 'local' }}</el-descriptions-item>
+          <el-descriptions-item label="模型名称">{{ diagState.model || 'qwen2.5:7b' }}</el-descriptions-item>
+          <el-descriptions-item label="服务端点">{{ diagState.endpoint || 'http://127.0.0.1:11434/v1' }}</el-descriptions-item>
           <el-descriptions-item label="连接状态">
             <el-tag :type="diagState.connected ? 'success' : 'danger'" size="small">
               {{ diagState.connected ? `已连通 (${diagState.latency_ms} ms)` : '连接不可用' }}
@@ -415,10 +415,10 @@
             <strong>未连通原因与解决提示：</strong>
           </div>
           <div class="diag-error-detail">{{ diagState.error_hint }}</div>
-          <div class="tunnel-hint-card">
-            <div class="tunnel-hint-label">若使用远程服务器大模型，请在本地终端执行 SSH 端口转发命令：</div>
+          <div v-if="diagState.error_hint && diagState.error_hint.includes('ssh -N')" class="tunnel-hint-card">
+            <div class="tunnel-hint-label">若使用远程端口转发，请在本地终端执行 SSH 隧道命令：</div>
             <div class="tunnel-cmd-row">
-              <code>ssh -N -L 127.0.0.1:18081:127.0.0.1:8080 xmu-hpc</code>
+              <code>{{ copyTunnelCmdText }}</code>
               <el-button size="small" type="primary" plain @click="copyTunnelCommand">
                 <el-icon style="margin-right:4px"><CopyDocument /></el-icon>复制
               </el-button>
@@ -501,10 +501,16 @@ const diagLoading = ref(false)
 const diagState = ref<LlmDiagnostics>({
   connected: false,
   latency_ms: 0,
-  model: 'qwen3.8-flash-next-unsloth-ud-q4_k_xl',
-  provider: 'xmu-qwen',
-  endpoint: 'http://127.0.0.1:18081/v1',
+  model: 'qwen2.5:7b',
+  provider: 'local',
+  endpoint: 'http://127.0.0.1:11434/v1',
   error_hint: '尚未探测连通性',
+})
+
+const copyTunnelCmdText = computed(() => {
+  const hint = diagState.value.error_hint || ''
+  const m = hint.match(/ssh\s+-N\s+[^\r\n"']+/)
+  return m ? m[0] : 'ssh -N -L 11434:localhost:11434 user@remote'
 })
 
 async function runDiagnostics() {
@@ -516,9 +522,9 @@ async function runDiagnostics() {
     diagState.value = {
       connected: false,
       latency_ms: 0,
-      model: 'qwen3.8-flash-next-unsloth-ud-q4_k_xl',
-      provider: 'xmu-qwen',
-      endpoint: 'http://127.0.0.1:18081/v1',
+      model: 'qwen2.5:7b',
+      provider: 'local',
+      endpoint: 'http://127.0.0.1:11434/v1',
       error_hint: err?.message || '无法连接后端诊断接口',
     }
   } finally {
@@ -532,8 +538,7 @@ function openDiagnosticsDialog() {
 }
 
 function copyTunnelCommand() {
-  const cmd = 'ssh -N -L 127.0.0.1:18081:127.0.0.1:8080 xmu-hpc'
-  navigator.clipboard.writeText(cmd).then(() => {
+  navigator.clipboard.writeText(copyTunnelCmdText.value).then(() => {
     ElMessage.success('已复制 SSH 隧道命令到剪贴板')
   })
 }
@@ -1179,8 +1184,7 @@ const SidePanelContent = defineComponent({
                         ? h('div', { class: 'df-folded-details' }, [
                             h('div', { class: 'df-error-msg' }, item.error_msg || '模型连接超时或服务未就绪。'),
                             h('div', { class: 'df-tunnel-box' }, [
-                              h('div', { class: 'df-tunnel-tip' }, '若使用远程服务器大模型，请在本地终端执行 SSH 端口转发命令：'),
-                              h('code', { class: 'df-tunnel-code' }, 'ssh -N -L 127.0.0.1:18081:127.0.0.1:8080 xmu-hpc'),
+                              h('div', { class: 'df-tunnel-tip' }, '可在【设置 ➔ AI 服务】中配置本地 Ollama 或外部大模型服务。'),
                               h(
                                 ElButton,
                                 {
@@ -1189,12 +1193,10 @@ const SidePanelContent = defineComponent({
                                   plain: true,
                                   style: 'margin-top:6px;',
                                   onClick: () => {
-                                    navigator.clipboard.writeText('ssh -N -L 127.0.0.1:18081:127.0.0.1:8080 xmu-hpc').then(() => {
-                                      ElMessage.success('已复制 SSH 隧道命令')
-                                    })
+                                    router.push('/settings')
                                   }
                                 },
-                                () => [h(ElIcon, { style: 'margin-right:4px' }, () => [h(CopyDocument)]), '复制隧道命令']
+                                () => [h(ElIcon, { style: 'margin-right:4px' }, () => [h(Setting)]), '前往设置']
                               )
                             ])
                           ])

@@ -135,8 +135,8 @@ cp .env.example .env
 | :--- | :--- | :--- |
 | `KRUSKAL_DATA_DIR` | `./data` | Directory where SQLite DB and encrypted vault files reside. |
 | `KRUSKAL_PORT` | `8000` | Port for the web gateway. |
-| `AI_ENDPOINT` | `http://127.0.0.1:18081/v1` | OpenAI-compatible endpoint for LLM features. |
-| `AI_MODEL` | `qwen3.8-flash...` | Model identifier for assistant summarization. |
+| `AI_ENDPOINT` | `http://127.0.0.1:11434/v1` | OpenAI-compatible endpoint for LLM features (e.g. Ollama, vLLM). |
+| `AI_MODEL` | `qwen2.5:7b` | Model identifier for assistant summarization. |
 
 ---
 

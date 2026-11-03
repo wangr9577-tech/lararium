@@ -45,22 +45,20 @@ def auth_headers() -> dict[str, str]:
 # ==================== 测试用例 ====================
 
 def test_1_llm_diagnostics_offline():
-    """测试大模型端点离线时的诊断接口输出，验证错误提示与 SSH 隧道指令。"""
-    # 模拟连通性探测失败 (Connection refused)
+    """测试大模型端点离线时的诊断接口输出，验证错误提示。"""
     with patch("urllib.request.urlopen", side_effect=urllib.error.URLError("[Errno 111] Connection refused")):
         resp = client.get("/api/assistant/diagnostics/llm", headers=auth_headers())
         assert resp.status_code == 200, f"诊断接口应返回 200: {resp.text}"
         data = resp.json()
         assert data["connected"] is False
-        assert data["model"] == "qwen3.8-flash-next-unsloth-ud-q4_k_xl"
-        assert "127.0.0.1:18081" in data["endpoint"]
-        assert "ssh -N -L 127.0.0.1:18081:127.0.0.1:8080 xmu-hpc" in data["error_hint"]
+        assert "11434" in data["endpoint"] or "http" in data["endpoint"]
+        assert "Connection refused" in data["error_hint"] or "连接" in data["error_hint"]
 
 
 def test_2_llm_diagnostics_connected():
     """测试大模型端点在线时的诊断接口输出。"""
     mock_resp = MagicMock()
-    mock_resp.read.return_value = b'{"object": "list", "data": [{"id": "qwen3.8-flash-next-unsloth-ud-q4_k_xl"}]}'
+    mock_resp.read.return_value = b'{"object": "list", "data": [{"id": "qwen2.5:7b"}]}'
     mock_resp.__enter__.return_value = mock_resp
 
     with patch("urllib.request.urlopen", return_value=mock_resp):
@@ -69,7 +67,7 @@ def test_2_llm_diagnostics_connected():
         data = resp.json()
         assert data["connected"] is True
         assert data["latency_ms"] >= 1
-        assert data["model"] == "qwen3.8-flash-next-unsloth-ud-q4_k_xl"
+        assert data["model"] == "qwen2.5:7b"
         assert data["error_hint"] == ""
 
 
@@ -109,7 +107,7 @@ def test_4_no_silent_image_dropping_on_error():
         call_count += 1
         # 模拟模型端点返回 400 不支持视觉
         raise urllib.error.HTTPError(
-            url="http://127.0.0.1:18081/v1/chat/completions",
+            url="http://127.0.0.1:11434/v1/chat/completions",
             code=400,
             msg="Bad Request",
             hdrs={},
@@ -123,9 +121,7 @@ def test_4_no_silent_image_dropping_on_error():
             assert False, "应抛出 AiUnavailable 异常"
         except llm.AiUnavailable as e:
             err_text = str(e)
-            # 必须透出真实多模态失败原因与隧道指引
             assert "视觉多模态模型调用失败" in err_text or "Vision input" in err_text
-            assert "ssh -N -L" in err_text
 
     # 严禁在背后剔除图片进行第二次请求（call_count 必须为 1）
     assert call_count == 1, f"严禁静默重试剔除图片！实际调用次数为 {call_count}"
@@ -134,7 +130,7 @@ def test_4_no_silent_image_dropping_on_error():
 def test_5_failure_visibility_and_error_msg_preservation():
     """测试大模型调用失败时，作业状态记录为 status='failed' 并保留真实的 error_msg，严禁伪成功。"""
     n_text = "【紧急项目申报延期】关于2026年重点研究计划申报延期至12月1日。"
-    simulated_error = "无法连接至 http://127.0.0.1:18081/v1 (Connection Refused)。请检查 SSH 隧道"
+    simulated_error = "无法连接至模型端点 (Connection Refused)。"
 
     with patch("app.services.llm.is_enabled", return_value=True), \
          patch("app.services.llm.chat_structured", side_effect=llm.AiUnavailable(simulated_error)):

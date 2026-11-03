@@ -1615,7 +1615,7 @@ def delete_record(record_id: int, _user: dict = Depends(get_current)):
 
 @router.get("/diagnostics/llm")
 def diagnostics_llm(_user: dict = Depends(get_current)):
-    """真实探测大模型连通性（检测 127.0.0.1:18081/v1/models 或 ping 请求），若不通提示 SSH 隧道命令。"""
+    """真实探测大模型连通性（向当前配置的 Endpoint 发送测试请求），若不通返回诊断与连接提示。"""
     return llm.check_diagnostics()
 
 

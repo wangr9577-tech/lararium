@@ -70,12 +70,12 @@ DOC_HIDE_DIRS = {".git", ".svn", ".hg", "node_modules", "__pycache__", ".venv", 
                  "site-packages", "data", "tmp", ".e2e-shots", ".agent-teams"}
 
 # AI 服务（M7）：本地 / SSH 隧道 OpenAI 兼容端点（如 xmu-qwen）
-AI_PROVIDER = os.environ.get("KRUSKAL_AI_PROVIDER", "xmu-qwen")
-AI_ENDPOINT = os.environ.get("KRUSKAL_AI_ENDPOINT", "http://127.0.0.1:18081/v1")
-AI_MODEL = os.environ.get("KRUSKAL_AI_MODEL", "qwen3.8-flash-next-unsloth-ud-q4_k_xl")
-AI_API_KEY = os.environ.get("KRUSKAL_AI_API_KEY", "unused")
-AI_TIMEOUT = int(os.environ.get("KRUSKAL_AI_TIMEOUT", "120"))
-AI_TUNNEL_HINT = os.environ.get("KRUSKAL_AI_TUNNEL_HINT", "ssh -N -L 127.0.0.1:18081:127.0.0.1:8080 xmu-hpc")
+AI_PROVIDER = os.environ.get("KRUSKAL_AI_PROVIDER", "ollama")
+AI_ENDPOINT = os.environ.get("KRUSKAL_AI_ENDPOINT", "http://127.0.0.1:11434/v1")
+AI_MODEL = os.environ.get("KRUSKAL_AI_MODEL", "qwen2.5:7b")
+AI_API_KEY = os.environ.get("KRUSKAL_AI_API_KEY", "")
+AI_TIMEOUT = int(os.environ.get("KRUSKAL_AI_TIMEOUT", "60"))
+AI_TUNNEL_HINT = os.environ.get("KRUSKAL_AI_TUNNEL_HINT", "")
 
 # PDF 导出临时目录（md→PDF 渲染用，用完即清）
 TMP_DIR = DATA_DIR / "tmp"

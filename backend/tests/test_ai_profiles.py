@@ -36,19 +36,19 @@ def test_ai_profiles_and_switching():
     assert data["enabled"] is True
     assert "profiles" in data
     assert len(data["profiles"]) >= 1
-    assert data["active_profile_id"] == "xmu-qwen"
+    assert data["active_profile_id"] == "local-ollama"
 
-    # 2. 保存自定义多模型列表，包含 XMU-Qwen 与新添加的 DeepSeek
+    # 2. 保存自定义多模型列表，包含 local-ollama 与新添加的 DeepSeek
     custom_profiles = [
         {
-            "id": "xmu-qwen",
-            "name": "XMU-Qwen (HPC 隧道)",
-            "provider": "xmu-qwen",
-            "endpoint": "http://127.0.0.1:18081/v1",
-            "model": "qwen3.8-flash-next-unsloth-ud-q4_k_xl",
+            "id": "local-ollama",
+            "name": "Local Ollama",
+            "provider": "ollama",
+            "endpoint": "http://127.0.0.1:11434/v1",
+            "model": "qwen2.5:7b",
             "api_key": "unused",
-            "timeout": 120,
-            "tunnel_hint": "ssh -N -L 127.0.0.1:18081:127.0.0.1:8080 xmu-hpc",
+            "timeout": 60,
+            "tunnel_hint": "",
         },
         {
             "id": "my-deepseek",
@@ -84,13 +84,13 @@ def test_ai_profiles_and_switching():
     assert cfg["model"] == "deepseek-chat"
     assert cfg["api_key"] == "sk-test123456"
 
-    # 4. 再次切换回 xmu-qwen 并持久化
+    # 4. 再次切换回 local-ollama 并持久化
     put_resp2 = client.put(
         "/api/settings",
         headers=headers,
         json={
             "updates": {
-                "ai.active_profile_id": "xmu-qwen",
+                "ai.active_profile_id": "local-ollama",
                 "ai.endpoint": custom_profiles[0]["endpoint"],
                 "ai.model": custom_profiles[0]["model"],
                 "ai.api_key": custom_profiles[0]["api_key"],
@@ -100,22 +100,5 @@ def test_ai_profiles_and_switching():
     assert put_resp2.status_code == 200
 
     cfg2 = llm._cfg()
-    assert cfg2["active_profile_id"] == "xmu-qwen"
-    assert cfg2["model"] == "qwen3.8-flash-next-unsloth-ud-q4_k_xl"
-
-    # 5. 测试 /api/ai/test 探测真实 XMU-Qwen 连通性
-    test_resp = client.post(
-        "/api/ai/test",
-        headers=headers,
-        json={
-            "endpoint": "http://127.0.0.1:18081/v1",
-            "model": "qwen3.8-flash-next-unsloth-ud-q4_k_xl",
-            "api_key": "unused",
-            "timeout": 10,
-        },
-    )
-    assert test_resp.status_code == 200
-    t_data = test_resp.json()
-    assert t_data["ok"] is True
-    assert t_data["latency_ms"] > 0
-    assert t_data["model"] == "qwen3.8-flash-next-unsloth-ud-q4_k_xl"
+    assert cfg2["active_profile_id"] == "local-ollama"
+    assert cfg2["model"] == "qwen2.5:7b"

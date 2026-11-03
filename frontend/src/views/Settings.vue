@@ -195,25 +195,24 @@
 
           <div class="form-grid">
             <el-form-item label="配置显示名称">
-              <el-input v-model="currentEdit.name" placeholder="例如：XMU-Qwen (HPC 隧道)" />
+              <el-input v-model="currentEdit.name" placeholder="例如：Local Ollama / DeepSeek API" />
             </el-form-item>
 
             <el-form-item label="渠道类型 / 提供商">
               <el-select v-model="currentEdit.provider" placeholder="选择或输入渠道" filterable allow-create style="width:100%">
-                <el-option label="xmu-qwen (学校 HPC 专属)" value="xmu-qwen" />
+                <el-option label="ollama (本地运行)" value="ollama" />
                 <el-option label="openai (标准兼容格式)" value="openai" />
                 <el-option label="deepseek (深度求索 API)" value="deepseek" />
-                <el-option label="ollama (本地运行)" value="ollama" />
                 <el-option label="vllm (本地推理)" value="vllm" />
               </el-select>
             </el-form-item>
 
             <el-form-item label="服务地址 Endpoint（OpenAI 兼容）">
-              <el-input v-model="currentEdit.endpoint" placeholder="http://127.0.0.1:18081/v1" />
+              <el-input v-model="currentEdit.endpoint" placeholder="http://127.0.0.1:11434/v1" />
             </el-form-item>
 
             <el-form-item label="模型 ID">
-              <el-input v-model="currentEdit.model" placeholder="qwen3.8-flash-next-unsloth-ud-q4_k_xl" />
+              <el-input v-model="currentEdit.model" placeholder="qwen2.5:7b" />
             </el-form-item>
 
             <el-form-item label="API 密钥（Key）">
@@ -221,7 +220,7 @@
                 v-model="currentEdit.api_key"
                 type="password"
                 show-password
-                placeholder="本地隧道填 unused，云端填 sk-..."
+                placeholder="本地推理填 unused，云端填 sk-..."
               />
             </el-form-item>
 
@@ -232,7 +231,7 @@
             <el-form-item label="SSH 隧道启动提示（可选）" style="grid-column: 1 / -1">
               <el-input
                 v-model="currentEdit.tunnel_hint"
-                placeholder="例如：ssh -N -L 127.0.0.1:18081:127.0.0.1:8080 xmu-hpc"
+                placeholder="例如：ssh -N -L 11434:localhost:11434 user@your-server"
               />
             </el-form-item>
           </div>
@@ -244,14 +243,14 @@
             <el-button :loading="aiTesting" @click="testCurrentEdit">
               测试此配置
             </el-button>
-            <el-button text @click="resetToDefaultXmuQwen">
-              恢复为默认 XMU-Qwen 隧道配置
+            <el-button text @click="resetToDefaultOllama">
+              恢复为默认本地 Ollama 配置
             </el-button>
           </div>
         </div>
       </div>
       <p class="hint">
-        提示：支持随时切换不同的模型服务。若使用 HPC 隧道，请确保在终端保持执行 <code>ssh -N -L 127.0.0.1:18081:127.0.0.1:8080 xmu-hpc</code>；若连接本地 Ollama 或云端 API，填写对应 Endpoint 与 API Key 即可。
+        提示：支持随时切换不同的模型服务。若使用本地 Ollama、vLLM 或云端 API，填写对应 Endpoint 与 API Key 即可。
       </p>
     </section>
 
@@ -323,18 +322,18 @@ interface AiProfile {
 
 const DEFAULT_AI_PROFILES: AiProfile[] = [
   {
-    id: 'xmu-qwen',
-    name: 'XMU-Qwen (HPC 隧道)',
-    provider: 'xmu-qwen',
-    endpoint: 'http://127.0.0.1:18081/v1',
-    model: 'qwen3.8-flash-next-unsloth-ud-q4_k_xl',
+    id: 'local-ollama',
+    name: 'Local Ollama (默认)',
+    provider: 'ollama',
+    endpoint: 'http://127.0.0.1:11434/v1',
+    model: 'qwen2.5:7b',
     api_key: 'unused',
-    timeout: 120,
-    tunnel_hint: 'ssh -N -L 127.0.0.1:18081:127.0.0.1:8080 xmu-hpc',
+    timeout: 60,
+    tunnel_hint: '',
   },
   {
     id: 'local-vllm',
-    name: '本地 vLLM / Ollama',
+    name: '本地 vLLM / LocalAI',
     provider: 'openai',
     endpoint: 'http://127.0.0.1:8000/v1',
     model: 'qwen2.5-7b-instruct',
@@ -368,17 +367,17 @@ const shareItems = ref<{ token: string; target: string; ref: string; title: stri
 // AI 多模型与多 Key 管理状态
 const aiEnabled = ref(true)
 const aiProfiles = ref<AiProfile[]>([])
-const activeProfileId = ref('xmu-qwen')
-const editingProfileId = ref('xmu-qwen')
+const activeProfileId = ref('local-ollama')
+const editingProfileId = ref('local-ollama')
 const currentEdit = reactive<AiProfile>({
-  id: 'xmu-qwen',
-  name: 'XMU-Qwen (HPC 隧道)',
-  provider: 'xmu-qwen',
-  endpoint: 'http://127.0.0.1:18081/v1',
-  model: 'qwen3.8-flash-next-unsloth-ud-q4_k_xl',
+  id: 'local-ollama',
+  name: 'Local Ollama (默认)',
+  provider: 'ollama',
+  endpoint: 'http://127.0.0.1:11434/v1',
+  model: 'qwen2.5:7b',
   api_key: 'unused',
-  timeout: 120,
-  tunnel_hint: 'ssh -N -L 127.0.0.1:18081:127.0.0.1:8080 xmu-hpc',
+  timeout: 60,
+  tunnel_hint: '',
 })
 const aiTesting = ref(false)
 const aiTestResult = ref<{ ok: boolean; message: string; latency_ms?: number } | null>(null)
@@ -433,10 +432,10 @@ function addNewProfile() {
     id: newId,
     name: `新模型配置 ${aiProfiles.value.length + 1}`,
     provider: 'openai',
-    endpoint: 'http://127.0.0.1:18081/v1',
-    model: 'qwen3.8-flash-next-unsloth-ud-q4_k_xl',
+    endpoint: 'http://127.0.0.1:11434/v1',
+    model: 'qwen2.5:7b',
     api_key: 'unused',
-    timeout: 120,
+    timeout: 60,
     tunnel_hint: '',
   }
   aiProfiles.value.push(newProfile)
@@ -483,15 +482,15 @@ async function deleteProfile(id: string) {
   ElMessage.success('已删除该模型配置')
 }
 
-// 恢复为默认 XMU-Qwen 配置
-function resetToDefaultXmuQwen() {
-  currentEdit.name = 'XMU-Qwen (HPC 隧道)'
-  currentEdit.provider = 'xmu-qwen'
-  currentEdit.endpoint = 'http://127.0.0.1:18081/v1'
-  currentEdit.model = 'qwen3.8-flash-next-unsloth-ud-q4_k_xl'
+// 恢复为默认 Ollama 配置
+function resetToDefaultOllama() {
+  currentEdit.name = 'Local Ollama (默认)'
+  currentEdit.provider = 'ollama'
+  currentEdit.endpoint = 'http://127.0.0.1:11434/v1'
+  currentEdit.model = 'qwen2.5:7b'
   currentEdit.api_key = 'unused'
-  currentEdit.timeout = 120
-  currentEdit.tunnel_hint = 'ssh -N -L 127.0.0.1:18081:127.0.0.1:8080 xmu-hpc'
+  currentEdit.timeout = 60
+  currentEdit.tunnel_hint = ''
   saveAiConfig(true)
 }
 
@@ -591,10 +590,10 @@ function loadAiSettings(cfg: Record<string, any>) {
       id: String(p.id || `p-${Math.random()}`),
       name: String(p.name || '未命名配置'),
       provider: String(p.provider || 'openai'),
-      endpoint: String(p.endpoint || 'http://127.0.0.1:18081/v1'),
-      model: String(p.model || 'qwen3.8-flash-next-unsloth-ud-q4_k_xl'),
+      endpoint: String(p.endpoint || 'http://127.0.0.1:11434/v1'),
+      model: String(p.model || 'qwen2.5:7b'),
       api_key: String(p.api_key || 'unused'),
-      timeout: Number(p.timeout || 120),
+      timeout: Number(p.timeout || 60),
       tunnel_hint: String(p.tunnel_hint || ''),
     }))
   } else {
