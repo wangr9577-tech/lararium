@@ -56,8 +56,8 @@ authz.sweep_expired()  # 启动清一轮历史过期会话（P1 token 治理）
 # 免密自动解锁（可选）：解开就不必再人工输主密码；任何失败都只当没开启，绝不阻断启动
 if autokey.try_unlock():
     logging.getLogger("kruskal").info(
-        "免密解锁生效（本机密钥：%s）：重启后无需输入主密码；"
-        "可在 设置 → 账户安全 关闭，「一键上锁」会同时撤销", config.AUTOKEY_KEY)
+        "免密解锁生效：重启后无需输入主密码；"
+        "可在 设置 → 账户安全 关闭，「一键上锁」会同时撤销")
     try:
         assistant_router.resume_paused_jobs()
     except Exception as e:

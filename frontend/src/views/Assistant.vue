@@ -184,8 +184,10 @@
       <!-- 列表内容区 -->
       <div v-loading="loading" class="record-list">
         <template v-if="filteredRecords.length">
+          <component :is="group.isCollection ? 'details' : 'div'" v-for="group in recordGroups" :key="group.key" :class="{ 'collection-group': group.isCollection, glass: group.isCollection }">
+          <summary v-if="group.isCollection" class="collection-heading">{{ group.title }} <span>{{ group.items.length }} 条 · 展开查看</span></summary>
           <div
-            v-for="item in filteredRecords"
+            v-for="item in group.items"
             :key="item.id"
             class="record-card glass"
             :class="[
@@ -206,9 +208,10 @@
                   {{ item.kind === 'notice' ? '通知事项' : '稍后看' }}
                 </span>
                 <span v-if="item.category" class="category-pill">{{ item.category }}</span>
+                <span v-if="item.kind === 'notice' && item.thread?.source_count" class="category-pill">{{ item.thread.source_count }} 条通知</span>
                 <span v-if="item.status === 'pending' || item.status === 'processing'" class="category-pill">正在整理</span>
                 <span v-else-if="item.status === 'failed'" class="category-pill failed-pill">
-                  <el-icon style="margin-right:2px"><WarningFilled /></el-icon>整理失败：模型连接不可用
+                  <el-icon style="margin-right:2px"><WarningFilled /></el-icon>整理失败
                 </span>
                 <span v-if="item.read_state === 'noted'" class="noted-pill">已入笔记</span>
                 <span
@@ -241,7 +244,7 @@
             <div v-if="item.status === 'failed'" class="card-failed-warning">
               <div class="failed-warning-header">
                 <el-icon class="warning-icon"><CircleCloseFilled /></el-icon>
-                <strong>整理失败：模型连接不可用</strong>
+                <strong>整理失败</strong>
               </div>
               <div v-if="item.error_msg" class="failed-warning-desc">
                 {{ item.error_msg }}
@@ -349,6 +352,7 @@
               </template>
             </div>
           </div>
+          </component>
         </template>
 
         <div v-else class="empty-state glass">
@@ -779,6 +783,27 @@ async function refreshProcessing() {
 
 const filteredRecords = computed(() => records.value)
 
+// 通知由后端按具体事项聚合；不同的论文和项目只按类别归入同一收集卡，保留各自的详情。
+const recordGroups = computed(() => {
+  const groups: { key: string; title: string; isCollection: boolean; items: AssistantRecord[] }[] = []
+  const collections = new Map<string, typeof groups[number]>()
+  for (const item of filteredRecords.value) {
+    if (item.kind !== 'later' || item.status !== 'ready') {
+      groups.push({ key: `record:${item.id}`, title: item.title, isCollection: false, items: [item] })
+      continue
+    }
+    const category = item.category || '其他'
+    let group = collections.get(category)
+    if (!group) {
+      group = { key: `category:${category}`, title: category, isCollection: true, items: [] }
+      collections.set(category, group)
+      groups.push(group)
+    }
+    group.items.push(item)
+  }
+  return groups
+})
+
 const alertCount = computed(() => {
   return records.value.filter((r) => r.kind === 'notice' && (r.deadline_date || r.latest_change || r.has_conflict)).length
 })
@@ -1135,7 +1160,7 @@ const SidePanelContent = defineComponent({
                     h('span', { class: ['kind-badge', item.kind] }, item.kind === 'notice' ? '通知事项' : '稍后看'),
                     item.category ? h('span', { class: 'category-pill' }, item.category) : null,
                     item.status === 'failed'
-                      ? h('span', { class: 'category-pill failed-pill' }, '整理失败：模型连接不可用')
+                      ? h('span', { class: 'category-pill failed-pill' }, '整理失败')
                       : null,
                     h('span', { class: 'detail-time' }, item.created_at)
                   ]),
@@ -1772,6 +1797,10 @@ const SidePanelContent = defineComponent({
   flex-direction: column;
   gap: 12px;
 }
+.collection-group { padding: 12px; border-radius: 16px; }
+.collection-heading { cursor: pointer; font-weight: 700; padding: 6px 4px; }
+.collection-heading span { color: var(--txt2); font-size: 12px; font-weight: 400; margin-left: 8px; }
+.collection-group[open] .record-card { margin-top: 10px; }
 
 .record-card {
   padding: 16px 18px;

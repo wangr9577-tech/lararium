@@ -74,8 +74,7 @@ def enable(dek: bytes) -> dict:
     config.AUTOKEY_WRAP.parent.mkdir(parents=True, exist_ok=True)
     vault.atomic_write_bytes(config.AUTOKEY_WRAP, json.dumps(payload).encode("utf-8"))
     _secret_to_0600(config.AUTOKEY_WRAP)
-    return {"enabled": True, "key_outside_data": key_outside_data_dir(),
-            "key_path": str(key_path)}
+    return {"enabled": True, "key_outside_data": key_outside_data_dir()}
 
 
 def disable() -> int:

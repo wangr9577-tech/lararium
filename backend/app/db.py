@@ -276,6 +276,7 @@ CREATE TABLE IF NOT EXISTS assistant_records (
     capture_id INTEGER,                     -- 关联原 workbench_captures.id（若由收集箱发起）
     wb_item_id INTEGER,                     -- 关联工作台事项 id
     kind TEXT NOT NULL DEFAULT 'later' CHECK(kind IN ('notice', 'later')),
+    input_mode TEXT NOT NULL DEFAULT 'legacy', -- auto 或用户明确选择的模式
     title TEXT NOT NULL DEFAULT '',
     source_type TEXT NOT NULL DEFAULT '',   -- text / image / file / url
     source_url TEXT NOT NULL DEFAULT '',
@@ -446,6 +447,8 @@ def init_db() -> None:
         if "wb_item_id" not in asst_cols:
             conn.execute("ALTER TABLE assistant_records ADD COLUMN wb_item_id INTEGER")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_asst_rec_wb ON assistant_records(wb_item_id)")
+        if "input_mode" not in asst_cols:
+            conn.execute("ALTER TABLE assistant_records ADD COLUMN input_mode TEXT NOT NULL DEFAULT 'legacy'")
     # P2-L5：文件级双保险——数据目录已是 700，库文件与 WAL 附属再收紧为仅属主可读写。
     # 放在 init_db 尾部随每次启动幂等执行（WAL 附属文件重建后的默认权限也会被拧回来）。
     for suffix in ("", "-wal", "-shm"):

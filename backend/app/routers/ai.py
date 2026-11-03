@@ -120,8 +120,21 @@ def ai_test_connection(body: TestAiIn | None = None, _user: dict = Depends(get_c
         "model": res.get("model", ""),
         "provider": res.get("provider", ""),
         "endpoint": res.get("endpoint", ""),
+        "available_models": res.get("available_models", []),
         "reason": res.get("error_hint", "") if not res["connected"] else "连接成功",
     }
+
+
+class DiscoverModelsIn(BaseModel):
+    endpoint: str
+    api_key: str | None = None
+
+
+@router.post("/discover-models")
+def ai_discover_models(body: DiscoverModelsIn, _user: dict = Depends(get_current)):
+    """获取指定端点当前加载的所有可用模型。"""
+    models = llm.fetch_endpoint_models(body.endpoint, body.api_key or "")
+    return {"ok": bool(models), "models": models}
 
 
 @router.get("/profiles")

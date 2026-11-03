@@ -48,6 +48,7 @@ export interface AssistantThread {
   created_at: string
   updated_at: string
   sources?: AssistantThreadSource[]
+  source_count?: number
 }
 
 export interface LlmDiagnostics {
@@ -149,14 +150,21 @@ export const assistantApi = {
     const qParams = new URLSearchParams()
     qParams.set('scope', filter)
     if (q.trim()) qParams.set('q', q.trim())
-    const url = `/assistant/records?${qParams.toString()}`
+    // 分页取全当前筛选结果，避免同类卡片的数量只反映默认前 50 条。
+    const items: any[] = []
+    const pageSize = 200
+    let total = 0
+    do {
+      qParams.set('limit', String(pageSize))
+      qParams.set('offset', String(items.length))
+      const res = await http.get<{ items: any[]; total?: number }>(`/assistant/records?${qParams.toString()}`)
+      if (!res || !Array.isArray(res.items)) break
+      items.push(...res.items)
+      total = res.total ?? items.length
+      if (!res.items.length) break
+    } while (items.length < total)
 
-    const res = await http.get<{ items: any[]; total?: number }>(url)
-    if (!res || !Array.isArray(res.items)) {
-      return []
-    }
-
-    return res.items.map((r) => {
+    return items.map((r) => {
       const parsedTags = parseArrayField(r.tags)
       const parsedHighlights = parseArrayField(r.highlights)
 

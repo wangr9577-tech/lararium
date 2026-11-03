@@ -51,14 +51,16 @@ if pgrep -f 'uvicorn app.main:app' >/dev/null 2>&1; then
 fi
 
 # 5) 确认并原子换入（旧 data 保留为 data.bak-*，绝不 rm）
-if [ -d backend/data ] && [ -n "$(ls -A backend/data 2>/dev/null)" ]; then
-  echo "警告: 将用备份整体替换 backend/data（旧目录自动备份为 backend/data.bak-<时间戳>，不会删除）。" >&2
+DATA_DIR="${KRUSKAL_DATA_DIR:-${KRUSKAL_DATA:-backend/data}}"
+if [ -d "$DATA_DIR" ] && [ -n "$(ls -A "$DATA_DIR" 2>/dev/null)" ]; then
+  echo "警告: 将用备份整体替换 $DATA_DIR（旧目录自动备份为 $DATA_DIR.bak-<时间戳>，不会删除）。" >&2
   read -r -p "确认还原？输入 yes 继续: " ok </dev/tty || ok=""
   [ "$ok" = "yes" ] || { echo "已取消"; exit 1; }
   STAMP="$(date +%Y%m%d-%H%M%S)"
-  mv backend/data "backend/data.bak-$STAMP"
-  echo "[restore] 旧数据已保留为 backend/data.bak-$STAMP（确认还原无误后可自行清理）"
+  mv "$DATA_DIR" "$DATA_DIR.bak-$STAMP"
+  echo "[restore] 旧数据已保留为 $DATA_DIR.bak-$STAMP（确认还原无误后可自行清理）"
 fi
-mv "$WORK/data" backend/data
-chmod 700 backend/data
+mkdir -p "$(dirname "$DATA_DIR")"
+mv "$WORK/data" "$DATA_DIR"
+chmod 700 "$DATA_DIR"
 echo "还原完成。请重启服务: bash backend/start.sh"

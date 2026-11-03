@@ -72,7 +72,7 @@ DOC_HIDE_DIRS = {".git", ".svn", ".hg", "node_modules", "__pycache__", ".venv", 
                  ".vscode", ".mypy_cache", ".pytest_cache", ".ruff_cache",
                  "site-packages", "data", "tmp", ".e2e-shots", ".agent-teams"}
 
-# AI 服务（M7）：本地 / SSH 隧道 OpenAI 兼容端点（如 xmu-qwen）
+# AI 服务（M7）：本地 / SSH 隧道 OpenAI 兼容端点（如 ollama / vllm / remote-tunnel）
 AI_PROVIDER = os.environ.get("KRUSKAL_AI_PROVIDER", "ollama")
 AI_ENDPOINT = os.environ.get("KRUSKAL_AI_ENDPOINT", "http://127.0.0.1:11434/v1")
 AI_MODEL = os.environ.get("KRUSKAL_AI_MODEL", "qwen2.5:7b")

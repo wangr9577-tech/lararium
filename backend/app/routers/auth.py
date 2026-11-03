@@ -149,8 +149,7 @@ def me(user: dict = Depends(authz.get_current)):
 
 def _auto_status() -> dict:
     return {"enabled": autokey.enabled(), "unlocked": vault.has_dek(),
-            "key_outside_data": autokey.key_outside_data_dir(),
-            "key_path": str(config.AUTOKEY_KEY)}
+            "key_outside_data": autokey.key_outside_data_dir()}
 
 
 @router.get("/auto-unlock")

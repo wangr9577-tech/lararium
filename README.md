@@ -85,8 +85,8 @@ SQLite Metadata DB        Encrypted Vault Storage
 
 1. Clone the repository:
    ```bash
-   git clone https://github.com/wangr9577-tech/lararium.git
-   cd lararium
+   git clone https://github.com/your-username/kruskal.git
+   cd kruskal
    ```
 
 2. Start the service using Docker Compose:

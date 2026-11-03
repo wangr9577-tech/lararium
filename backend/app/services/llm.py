@@ -65,44 +65,14 @@ def _settings_ai() -> dict:
 
 DEFAULT_PROFILES = [
     {
-        "id": "local-ollama",
+        "id": "default",
         "name": "Local Ollama (默认)",
-        "provider": "ollama",
-        "endpoint": "http://127.0.0.1:11434/v1",
-        "model": "qwen2.5:7b",
-        "api_key": "unused",
-        "timeout": 60,
-        "tunnel_hint": "",
-    },
-    {
-        "id": "deepseek",
-        "name": "DeepSeek 官方 API",
-        "provider": "deepseek",
-        "endpoint": "https://api.deepseek.com/v1",
-        "model": "deepseek-chat",
-        "api_key": "",
-        "timeout": 60,
-        "tunnel_hint": "",
-    },
-    {
-        "id": "siliconflow",
-        "name": "SiliconFlow 硅基流动",
-        "provider": "openai",
-        "endpoint": "https://api.siliconflow.cn/v1",
-        "model": "deepseek-ai/DeepSeek-V3",
-        "api_key": "",
-        "timeout": 60,
-        "tunnel_hint": "",
-    },
-    {
-        "id": "local-vllm",
-        "name": "本地 vLLM / LocalAI",
-        "provider": "openai",
-        "endpoint": "http://127.0.0.1:8000/v1",
-        "model": "qwen2.5-7b-instruct",
-        "api_key": "unused",
-        "timeout": 60,
-        "tunnel_hint": "",
+        "provider": config.AI_PROVIDER or "ollama",
+        "endpoint": config.AI_ENDPOINT or "http://127.0.0.1:11434/v1",
+        "model": config.AI_MODEL or "qwen2.5:7b",
+        "api_key": config.AI_API_KEY or "unused",
+        "timeout": config.AI_TIMEOUT or 60,
+        "tunnel_hint": config.AI_TUNNEL_HINT or "",
     },
 ]
 
@@ -140,7 +110,22 @@ def get_profiles_and_active() -> tuple[list[dict], str, bool]:
             if s.get("ai.timeout"):
                 profiles[0]["timeout"] = int(s.get("ai.timeout"))
 
+    # 兼容性迁移：若数据库保存了历史旧配置 (如包含特定私有服务器环境的旧模板)，平滑迁移为中性模板
+    for p in profiles:
+        pid = str(p.get("id", "")).lower()
+        hint = str(p.get("tunnel_hint", "")).lower()
+        name = str(p.get("name", "")).lower()
+        if "qwen" in pid and ("hpc" in pid or "strata" in pid or pid.startswith("x")):
+            p["id"] = "remote-tunnel"
+        if any(k in hint for k in ["hpc", "strata"]):
+            p["tunnel_hint"] = "ssh -N -L 127.0.0.1:8080:127.0.0.1:8000 user@remote-host"
+        if any(k in name for k in ["hpc", "strata"]):
+            p["name"] = "远程 SSH 隧道"
+
     active_id = str(s.get("ai.active_profile_id") or "")
+    if "qwen" in active_id.lower() and (active_id.lower().startswith("x") or "hpc" in active_id.lower()):
+        active_id = "remote-tunnel"
+
     if not any(p.get("id") == active_id for p in profiles):
         active_id = profiles[0]["id"]
 
@@ -209,7 +194,9 @@ def _do_request(cfg: dict, messages: list[dict], max_tokens: int, temperature: f
     with urllib.request.urlopen(req, timeout=cfg["timeout"]) as resp:
         data = json.loads(resp.read().decode("utf-8"))
     try:
-        out = data["choices"][0]["message"]["content"]
+        msg = data["choices"][0]["message"]
+        out = msg.get("content")
+        # 推理过程不是最终答案，不能将其作为结构化结果使用。
     except (KeyError, IndexError, TypeError):
         raise AiUnavailable("AI 返回格式异常")
     return (out or "").strip()
@@ -260,6 +247,11 @@ def chat(messages: list[dict], max_tokens: int = 1500, temperature: float = 0.3)
 def _parse_json(text: str) -> dict:
     """健壮提取与解析文本中的 JSON 对象。"""
     s = text.strip()
+    # 剥离思考模型可能输出的 <think>...</think> 标签，防止内部反括号干扰 JSON 提取
+    s = re.sub(r"<think>[\s\S]*?</think>", "", s).strip()
+    if "<think>" in s or "</think>" in s:
+        raise ValueError("模型思考输出未结束，缺少完整的最终答案")
+
     # 1. 直接 json.loads
     try:
         data = json.loads(s)
@@ -278,13 +270,11 @@ def _parse_json(text: str) -> dict:
         except Exception:
             pass
 
-    # 3. 寻找最外层 { ... }
-    first_brace = s.find("{")
-    last_brace = s.rfind("}")
-    if first_brace != -1 and last_brace != -1 and last_brace > first_brace:
-        snippet = s[first_brace:last_brace + 1]
+    # 从每个左括号尝试解码完整对象，避免前后解释文字或多个对象干扰。
+    decoder = json.JSONDecoder()
+    for match in list(re.finditer(r"\{", s))[:1]:
         try:
-            data = json.loads(snippet)
+            data, _ = decoder.raw_decode(s[match.start():])
             if isinstance(data, dict):
                 return data
         except Exception:
@@ -313,8 +303,17 @@ def chat_structured(messages: list[dict], system_prompt: str = "",
     raw_text = chat(msgs, max_tokens=max_tokens, temperature=temperature)
     try:
         return _parse_json(raw_text)
-    except Exception as e:
-        raise AiUnavailable(f"AI 输出解析为结构化 JSON 失败: {e}")
+    except ValueError:
+        # 保留原始文字和图片，再请求一次完整答案；不把推理内容当结果，
+        # 也不将用户资料或模型输出写入日志。
+        retry_msgs = msgs + [{"role": "user", "content":
+            "上次回答无法解析。请重新完成原任务，只输出一个完整有效的 JSON 对象，"
+            "使用双引号，不要输出思考过程、代码块或解释。"}]
+        retry_text = chat(retry_msgs, max_tokens=max_tokens, temperature=0.0)
+        try:
+            return _parse_json(retry_text)
+        except ValueError as e:
+            raise AiUnavailable(f"AI 两次输出均不是完整的 JSON 对象，请检查模型输出或重试: {e}") from e
 
 
 def format_multimodal_message(
@@ -358,16 +357,42 @@ def format_multimodal_message(
     return {"role": role, "content": parts}
 
 
+def fetch_endpoint_models(endpoint: str, api_key: str = "", timeout: int = 8) -> list[str]:
+    """尝试从 endpoint 的 /models 接口获取可用模型 ID 列表。"""
+    ep = normalize_endpoint(endpoint)
+    if not ep:
+        return []
+    headers = {"Content-Type": "application/json"}
+    if api_key and api_key != "unused":
+        headers["Authorization"] = f"Bearer {api_key}"
+    req = urllib.request.Request(f"{ep}/models", headers=headers, method="GET")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            models = []
+            if isinstance(data, dict) and "data" in data and isinstance(data["data"], list):
+                for item in data["data"]:
+                    if isinstance(item, dict) and item.get("id"):
+                        models.append(str(item["id"]))
+            return models
+    except Exception:
+        return []
+
+
 def check_diagnostics(override_cfg: dict | None = None) -> dict:
-    """真实探测大模型服务连通性（优先检测 /v1/models，备选微型 completion），返回连通状态与延迟，若不通则提供 SSH 隧道提示。"""
+    """真实探测大模型服务连通性与模型可用性。
+    1. 探测 /models 获取远端真实已加载的模型列表；
+    2. 严格核对配置的 model 是否存在；
+    3. 发送微型 chat/completions 推理测试，彻底避免端口监听成功但模型无法调用的假阳性！
+    """
     if override_cfg:
         cfg = {
             "enabled": True,
             "provider": str(override_cfg.get("provider") or "openai"),
             "endpoint": str(override_cfg.get("endpoint") or "").rstrip("/"),
-            "model": str(override_cfg.get("model") or ""),
+            "model": str(override_cfg.get("model") or "").strip(),
             "api_key": str(override_cfg.get("api_key") or ""),
-            "timeout": int(override_cfg.get("timeout") or 10),
+            "timeout": int(override_cfg.get("timeout") or 60),
             "tunnel_hint": str(override_cfg.get("tunnel_hint") or ""),
             "name": str(override_cfg.get("name") or "临时测试配置"),
         }
@@ -375,9 +400,9 @@ def check_diagnostics(override_cfg: dict | None = None) -> dict:
         cfg = _cfg()
 
     endpoint = normalize_endpoint(cfg.get("endpoint") or "")
-    model = cfg["model"]
-    provider = cfg["provider"]
-    tunnel_hint = cfg["tunnel_hint"]
+    model = cfg.get("model", "").strip()
+    provider = cfg.get("provider", "openai")
+    tunnel_hint = cfg.get("tunnel_hint", "")
     name = cfg.get("name", "")
 
     if not cfg["enabled"]:
@@ -388,7 +413,20 @@ def check_diagnostics(override_cfg: dict | None = None) -> dict:
             "model": model,
             "provider": provider,
             "endpoint": endpoint,
-            "error_hint": f"AI 服务未启用 (ai.enabled=False)。请在设置中开启，或运行 SSH 隧道: {tunnel_hint}",
+            "available_models": [],
+            "error_hint": f"AI 服务总开关未启用 (ai.enabled=False)。请在设置中打开「启用 AI 服务」开关，或运行 SSH 隧道: {tunnel_hint}",
+        }
+
+    if not endpoint:
+        return {
+            "connected": False,
+            "latency_ms": 0,
+            "name": name,
+            "model": model,
+            "provider": provider,
+            "endpoint": "",
+            "available_models": [],
+            "error_hint": "未配置 API 服务地址 (Endpoint)",
         }
 
     start = time.perf_counter()
@@ -396,62 +434,70 @@ def check_diagnostics(override_cfg: dict | None = None) -> dict:
     if cfg.get("api_key") and cfg["api_key"] != "unused":
         headers["Authorization"] = f"Bearer {cfg['api_key']}"
 
-    # 1. 优先探测 GET /models
-    req = urllib.request.Request(
-        f"{endpoint}/models",
+    # 1. 尝试获取服务端所有已加载/可用模型列表
+    available_models = fetch_endpoint_models(endpoint, cfg.get("api_key", ""), timeout=min(cfg["timeout"], 6))
+
+    # 2. 如果成功抓取到模型列表，且用户配置了 model，但该 model 不在列表中
+    if available_models and model and model not in available_models:
+        latency = int((time.perf_counter() - start) * 1000)
+        return {
+            "connected": False,
+            "latency_ms": latency,
+            "name": name,
+            "model": model,
+            "provider": provider,
+            "endpoint": endpoint,
+            "available_models": available_models,
+            "error_hint": f"端点连接成功，但未找到配置的模型 '{model}'！服务端当前可用模型: {available_models}。请将模型配置修改为有效模型名称。",
+        }
+
+    # 3. 执行真实 chat/completions 推理探测
+    test_model = model or (available_models[0] if available_models else "default")
+    ping_body = json.dumps({
+        "model": test_model,
+        "messages": [{"role": "user", "content": "hi"}],
+        "max_tokens": 10,
+    }).encode("utf-8")
+    ping_req = urllib.request.Request(
+        f"{endpoint}/chat/completions",
+        data=ping_body,
         headers=headers,
-        method="GET",
+        method="POST",
     )
     try:
-        with urllib.request.urlopen(req, timeout=min(cfg["timeout"], 8)) as resp:
+        with urllib.request.urlopen(ping_req, timeout=min(cfg["timeout"], 60)) as resp:
             resp.read()
             latency = int((time.perf_counter() - start) * 1000)
             return {
                 "connected": True,
                 "latency_ms": max(1, latency),
                 "name": name,
-                "model": model,
+                "model": test_model,
                 "provider": provider,
                 "endpoint": endpoint,
+                "available_models": available_models,
                 "error_hint": "",
             }
-    except Exception as e_models:
-        # 2. 备选探测：部分反代或网关禁止 /models，尝试微型 ping 补全
-        try:
-            ping_body = json.dumps({
-                "model": model,
-                "messages": [{"role": "user", "content": "ping"}],
-                "max_tokens": 1,
-            }).encode("utf-8")
-            ping_req = urllib.request.Request(
-                f"{endpoint}/chat/completions",
-                data=ping_body,
-                headers=headers,
-                method="POST",
-            )
-            with urllib.request.urlopen(ping_req, timeout=min(cfg["timeout"], 10)) as resp:
-                resp.read()
-                latency = int((time.perf_counter() - start) * 1000)
-                return {
-                    "connected": True,
-                    "latency_ms": max(1, latency),
-                    "name": name,
-                    "model": model,
-                    "provider": provider,
-                    "endpoint": endpoint,
-                    "error_hint": "",
-                }
-        except Exception as e_ping:
-            latency = int((time.perf_counter() - start) * 1000)
-            return {
-                "connected": False,
-                "latency_ms": latency,
-                "name": name,
-                "model": model,
-                "provider": provider,
-                "endpoint": endpoint,
-                "error_hint": f"无法连接到模型端点 ({endpoint}): {e_ping}。若使用远程模型，请在本机运行 SSH 隧道命令: {tunnel_hint}",
-            }
+    except Exception as e_ping:
+        latency = int((time.perf_counter() - start) * 1000)
+        err_msg = str(e_ping)
+        if isinstance(e_ping, urllib.error.HTTPError):
+            try:
+                err_body = e_ping.read().decode("utf-8", errors="ignore")
+                if err_body:
+                    err_msg = f"HTTP {e_ping.code}: {err_body[:200]}"
+            except Exception:
+                pass
+        return {
+            "connected": False,
+            "latency_ms": latency,
+            "name": name,
+            "model": test_model,
+            "provider": provider,
+            "endpoint": endpoint,
+            "available_models": available_models,
+            "error_hint": f"模型调用失败: {err_msg}。若使用远程模型，请在本机运行 SSH 隧道命令: {tunnel_hint}",
+        }
 
 
 # ==================== 启发式规则提取（AI 停用/故障时的无缝降级兜底） ====================

@@ -27,6 +27,7 @@ strata-restart.sh
 .acl-recovery/
 .e2e-shots/
 kruskal_*_test_*
+助手测试/
 frontend/pnpm-lock.yaml
 frontend/pnpm-workspace.yaml
 

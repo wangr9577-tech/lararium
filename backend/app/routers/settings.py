@@ -63,13 +63,17 @@ def put_settings(body: SettingsIn, _user: dict = Depends(get_current)):
         except (json.JSONDecodeError, TypeError):
             latest[r["key"]] = r["value"]
 
-    # 安全同步写入受 .gitignore 严格忽略的独立本地配置文件 local_settings.json
+    # 安全同步写入受 .gitignore 严格忽略的独立本地配置文件 local_settings.json，并严格设置 0600 权限
     try:
         config.DATA_DIR.mkdir(parents=True, exist_ok=True)
         config.LOCAL_SETTINGS_PATH.write_text(
             json.dumps(latest, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
+        try:
+            os.chmod(config.LOCAL_SETTINGS_PATH, 0o600)
+        except OSError:
+            pass
     except Exception:
         pass
 

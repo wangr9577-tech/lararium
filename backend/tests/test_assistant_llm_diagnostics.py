@@ -57,8 +57,9 @@ def test_1_llm_diagnostics_offline():
 
 def test_2_llm_diagnostics_connected():
     """测试大模型端点在线时的诊断接口输出。"""
+    active_model = llm._cfg()["model"]
     mock_resp = MagicMock()
-    mock_resp.read.return_value = b'{"object": "list", "data": [{"id": "qwen2.5:7b"}]}'
+    mock_resp.read.return_value = json.dumps({"object": "list", "data": [{"id": active_model}]}).encode("utf-8")
     mock_resp.__enter__.return_value = mock_resp
 
     with patch("urllib.request.urlopen", return_value=mock_resp):
@@ -67,7 +68,7 @@ def test_2_llm_diagnostics_connected():
         data = resp.json()
         assert data["connected"] is True
         assert data["latency_ms"] >= 1
-        assert data["model"] == "qwen2.5:7b"
+        assert data["model"] == active_model
         assert data["error_hint"] == ""
 
 

@@ -55,8 +55,8 @@ def bootstrap_admin() -> None:
         os.chmod(config.INIT_PW_FILE, 0o600)
     except OSError:
         pass
-    print(f"[kruskal] 首次启动，初始账号 {config.ADMIN_USERNAME} / 密码 {pw}"
-          f"（已写入 {config.INIT_PW_FILE}，登录后请修改）")
+    print(f"[kruskal] 首次启动，已创建初始管理员账号 {config.ADMIN_USERNAME}。"
+          "初始密码已写入独立安全凭据文件，请查阅并登录后立即修改密码。")
 
 
 def ensure_keywrap(password: str) -> None:

@@ -20,6 +20,12 @@ _ROOT_DIR = _BACKEND_DIR.parent
 if str(_ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(_ROOT_DIR))
 
+# 确保在导入任何应用模块前优先设置隔离的测试数据环境，防止模块导入阶段副作用污染真实数据
+_preimport_tmp = tempfile.mkdtemp(prefix="kruskal_test_isolation_")
+os.environ.setdefault("KRUSKAL_DATA_DIR", _preimport_tmp)
+os.environ.setdefault("KRUSKAL_DEV", "1")
+os.environ.setdefault("KRUSKAL_CSP", "0")
+
 from starlette.testclient import TestClient
 
 from app import auth as authz

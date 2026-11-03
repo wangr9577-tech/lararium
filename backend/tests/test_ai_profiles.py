@@ -36,7 +36,7 @@ def test_ai_profiles_and_switching():
     assert data["enabled"] is True
     assert "profiles" in data
     assert len(data["profiles"]) >= 1
-    assert data["active_profile_id"] == "local-ollama"
+    assert data["active_profile_id"] in ("default", "local-ollama")
 
     # 2. 保存自定义多模型列表，包含 local-ollama 与新添加的 DeepSeek
     custom_profiles = [

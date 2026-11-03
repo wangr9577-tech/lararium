@@ -77,11 +77,11 @@
       <el-button type="primary" size="small" @click="saveTranslate">保存翻译源</el-button>
     </section>
 
-    <!-- AI 本地与多模型服务管理 -->
+    <!-- AI 模型服务管理 -->
     <section class="glass card ai-manage-card">
       <div class="card-title">
         <el-icon><Cpu /></el-icon>
-        <span>AI 本地与多模型服务配置</span>
+        <span>AI 模型服务配置</span>
         <el-tag v-if="aiEnabled" type="success" size="small" effect="plain" style="margin-left:auto">服务已开启</el-tag>
         <el-tag v-else type="info" size="small" effect="plain" style="margin-left:auto">服务已关闭</el-tag>
       </div>
@@ -113,7 +113,7 @@
               >
                 <div class="profile-option-item">
                   <span class="p-name">{{ p.name }}</span>
-                  <el-tag size="small" type="info" style="font-size:11px; margin-left: 8px">{{ p.model }}</el-tag>
+                  <el-tag size="small" type="info" style="font-size:11px; margin-left: 8px">{{ p.model || '未设模型' }}</el-tag>
                 </div>
               </el-option>
             </el-select>
@@ -130,9 +130,9 @@
               <el-icon style="margin-right:4px"><Connection /></el-icon>
               测试当前连接
             </el-button>
-            <el-button size="small" @click="addNewProfile">
+            <el-button size="small" type="primary" @click="addNewProfile">
               <el-icon style="margin-right:4px"><Plus /></el-icon>
-              新增模型
+              添加新模型
             </el-button>
           </div>
         </div>
@@ -141,9 +141,25 @@
         <div v-if="aiTestResult" class="test-feedback-box" :class="{ ok: aiTestResult.ok }">
           <el-icon v-if="aiTestResult.ok" color="#10b981"><Check /></el-icon>
           <el-icon v-else color="#ef4444"><CloseBold /></el-icon>
-          <span class="feedback-text">
-            {{ aiTestResult.ok ? `连接成功！响应延迟: ${aiTestResult.latency_ms}ms` : `连接失败：${aiTestResult.message}` }}
-          </span>
+          <div class="feedback-content">
+            <span class="feedback-text">{{ aiTestResult.message }}</span>
+            <div
+              v-if="aiTestResult.available_models && aiTestResult.available_models.length > 0 && currentEdit.model !== aiTestResult.available_models[0]"
+              class="feedback-action-row"
+            >
+              <span>服务端检测到可用模型：</span>
+              <el-tag
+                v-for="m in aiTestResult.available_models"
+                :key="m"
+                size="small"
+                effect="plain"
+                class="clickable-model-tag"
+                @click="applyDiscoveredModel(m)"
+              >
+                点此填入 {{ m }}
+              </el-tag>
+            </div>
+          </div>
         </div>
 
         <!-- 渠道标签选项卡 -->
@@ -157,7 +173,7 @@
           >
             <span class="chip-name">{{ p.name }}</span>
             <span v-if="activeProfileId === p.id" class="chip-active-badge">生效中</span>
-            <span class="chip-model-sub">{{ p.model }}</span>
+            <span class="chip-model-sub">{{ p.model || '未配置模型' }}</span>
           </div>
         </div>
 
@@ -193,54 +209,26 @@
             </div>
           </div>
 
-          <!-- 工业标准渠道快速预设 (类似 ccswitch / deepseek-harness) -->
-          <div class="preset-quick-bar">
-            <span class="preset-quick-title">标准渠道快速预设：</span>
-            <div class="preset-chips">
-              <span class="preset-chip" @click="applyPreset('deepseek')">
-                <span class="preset-chip-dot ds"></span>DeepSeek 官方 API
-              </span>
-              <span class="preset-chip" @click="applyPreset('siliconflow')">
-                <span class="preset-chip-dot sf"></span>SiliconFlow 硅基流动
-              </span>
-              <span class="preset-chip" @click="applyPreset('ollama')">
-                <span class="preset-chip-dot ol"></span>Local Ollama (本地)
-              </span>
-              <span class="preset-chip" @click="applyPreset('vllm')">
-                <span class="preset-chip-dot vl"></span>Local vLLM / LocalAI
-              </span>
-              <span class="preset-chip" @click="applyPreset('openai')">
-                <span class="preset-chip-dot oa"></span>OpenAI 兼容
-              </span>
-            </div>
-          </div>
-
-          <!-- 标准表单区 -->
+          <!-- 标准表单区：用户自由命名与填写模型信息 -->
           <el-form label-position="top" class="ai-editor-form" @submit.prevent>
-            <!-- Row 1: 显示名称 + 渠道类型 -->
-            <div class="form-row-2">
-              <el-form-item label="配置显示名称">
-                <el-input v-model="currentEdit.name" placeholder="例如：DeepSeek 官方 API / Local Ollama" />
-              </el-form-item>
-
-              <el-form-item label="渠道类型 / 提供商">
-                <el-select v-model="currentEdit.provider" placeholder="选择渠道协议" style="width:100%">
-                  <el-option label="openai (标准兼容格式)" value="openai" />
-                  <el-option label="deepseek (深度求索 DeepSeek)" value="deepseek" />
-                  <el-option label="ollama (本地 Ollama)" value="ollama" />
-                  <el-option label="vllm (本地 vLLM)" value="vllm" />
-                </el-select>
+            <!-- 配置名称 -->
+            <div class="form-row-1">
+              <el-form-item label="配置名称">
+                <el-input
+                  v-model="currentEdit.name"
+                  placeholder="例如：我的大模型 / HPC 远程节点 / 个人云端"
+                />
               </el-form-item>
             </div>
 
-            <!-- Row 2: 服务地址 Base URL (独占整行，通栏大输入框，醒目无遮挡) -->
+            <!-- API 服务地址 Base URL -->
             <div class="form-row-1">
               <el-form-item label="API 服务地址 (Base URL / Endpoint)">
                 <el-input
                   v-model="currentEdit.endpoint"
                   size="large"
                   clearable
-                  placeholder="https://api.deepseek.com/v1 或 http://127.0.0.1:11434/v1"
+                  placeholder="例如：http://127.0.0.1:11434/v1 或 https://api.your-domain.com/v1"
                 >
                   <template #prefix>
                     <el-icon><Link /></el-icon>
@@ -248,12 +236,12 @@
                 </el-input>
                 <div class="field-hint">
                   <el-icon><Check /></el-icon>
-                  <span>遵循标准 OpenAI 兼容协议。可直接粘贴 Base URL（末尾 <code>/v1</code> 自动补齐，多余路径自动规范化）。</span>
+                  <span>遵循标准 OpenAI 兼容协议。可直接粘贴网址（末尾 <code>/v1</code> 自动规范化补齐）。</span>
                 </div>
               </el-form-item>
             </div>
 
-            <!-- Row 3: API 密钥 + 模型 ID -->
+            <!-- API 密钥 + 模型标识 -->
             <div class="form-row-2">
               <el-form-item label="API 密钥 (API Key)">
                 <el-input
@@ -261,59 +249,57 @@
                   type="password"
                   show-password
                   clearable
-                  placeholder="云端服务填 sk-...，本地 Ollama 填 unused"
+                  placeholder="如需密钥请填写，免密或本地服务可直接留空"
                 >
                   <template #prefix>
                     <el-icon><Key /></el-icon>
                   </template>
                 </el-input>
-                <div class="field-hint-sub">本地 Ollama / vLLM 无需 key，保留 <code>unused</code> 即可。</div>
+                <div class="field-hint-sub">本地或免密推理服务留空或保持 <code>unused</code> 即可。</div>
               </el-form-item>
 
-              <el-form-item label="模型 ID (Model ID)">
-                <el-select
-                  v-model="currentEdit.model"
-                  filterable
-                  allow-create
-                  default-first-option
-                  placeholder="选择常用推荐模型或直接键盘输入"
-                  style="width: 100%"
-                >
-                  <el-option-group label="DeepSeek 官方推荐">
-                    <el-option label="deepseek-chat (通用对话 / V3)" value="deepseek-chat" />
-                    <el-option label="deepseek-reasoner (深度思考推理 / R1)" value="deepseek-reasoner" />
-                  </el-option-group>
-                  <el-option-group label="硅基流动 SiliconFlow 推荐">
-                    <el-option label="deepseek-ai/DeepSeek-V3" value="deepseek-ai/DeepSeek-V3" />
-                    <el-option label="deepseek-ai/DeepSeek-R1" value="deepseek-ai/DeepSeek-R1" />
-                    <el-option label="Qwen/Qwen2.5-7B-Instruct" value="Qwen/Qwen2.5-7B-Instruct" />
-                  </el-option-group>
-                  <el-option-group label="本地 Ollama / vLLM 常用">
-                    <el-option label="qwen2.5:7b" value="qwen2.5:7b" />
-                    <el-option label="qwen2.5:14b" value="qwen2.5:14b" />
-                    <el-option label="deepseek-r1:7b" value="deepseek-r1:7b" />
-                    <el-option label="deepseek-r1:8b" value="deepseek-r1:8b" />
-                    <el-option label="llama3.1:8b" value="llama3.1:8b" />
-                  </el-option-group>
-                  <el-option-group label="OpenAI 官方">
-                    <el-option label="gpt-4o-mini" value="gpt-4o-mini" />
-                    <el-option label="gpt-4o" value="gpt-4o" />
-                  </el-option-group>
-                </el-select>
-                <div class="field-hint-sub">可直接键盘输入任何私有量化或部署的模型标识</div>
+              <el-form-item label="模型标识 (Model ID)">
+                <div style="display:flex; gap:8px; width:100%; align-items:center;">
+                  <el-select
+                    v-model="currentEdit.model"
+                    filterable
+                    allow-create
+                    default-first-option
+                    placeholder="输入模型名称，或点右侧「拉取模型」"
+                    style="flex: 1"
+                  >
+                    <el-option
+                      v-for="m in discoveredModels"
+                      :key="m"
+                      :label="m"
+                      :value="m"
+                    />
+                  </el-select>
+                  <el-button
+                    size="default"
+                    plain
+                    type="primary"
+                    :loading="discoveringModels"
+                    title="从端点 /models 接口自动拉取当前加载的所有模型"
+                    @click="discoverModels"
+                  >
+                    拉取模型
+                  </el-button>
+                </div>
+                <div class="field-hint-sub">可直接键盘输入任何模型标识，或点「拉取模型」从服务实时识别已加载的模型。</div>
               </el-form-item>
             </div>
 
-            <!-- Row 4: 超时时间 + SSH 隧道命令 -->
+            <!-- 超时时间 + SSH 隧道命令 -->
             <div class="form-row-2">
-              <el-form-item label="超时时间（秒）">
+              <el-form-item label="请求超时时间（秒）">
                 <el-input-number v-model="currentEdit.timeout" :min="10" :max="600" style="width: 100%" />
               </el-form-item>
 
-              <el-form-item label="SSH 端口转发隧道命令（可选，远程服务器映射）">
+              <el-form-item label="SSH 端口转发隧道命令（可选备注）">
                 <el-input
                   v-model="currentEdit.tunnel_hint"
-                  placeholder="例如：ssh -N -L 11434:localhost:11434 user@your-server"
+                  placeholder="例如：ssh -N -L 11434:127.0.0.1:11434 user@remote-host"
                 />
               </el-form-item>
             </div>
@@ -326,14 +312,11 @@
             <el-button :loading="aiTesting" @click="testCurrentEdit">
               测试此配置
             </el-button>
-            <el-button text @click="resetAllProfilesToDefault">
-              重置为标准官方预设列表
-            </el-button>
           </div>
         </div>
       </div>
       <p class="hint">
-        提示：支持随时切换不同的模型服务。若使用本地 Ollama、vLLM 或云端 API，填写对应 Endpoint 与 API Key 即可。
+        提示：支持自由添加任意 OpenAI 兼容的模型服务。填写对应服务网址与 API Key，点击「拉取模型」即可快速完成配置。
       </p>
     </section>
 
@@ -362,7 +345,7 @@
         <el-switch v-model="auto.enabled" @change="toggleAuto" />
       </div>
       <p class="hint">
-        本机密钥存在 <code>{{ auto.keyPath || 'backend/.autokey' }}</code>，已 gitignore，且<b>不在备份包里</b>
+        本机密钥存放在数据目录{{ auto.keyOutsideData ? '外部独立安全路径' : '内部（.autokey）' }}，已 gitignore，且<b>不在备份包里</b>
         —— 拿到备份仍然解不开你的数据。它把防线从「主密码」降为「文件权限 + 备份口令」：
         仍挡住同机其他普通用户，<b>不挡</b> root 与恶意进程。换机器、重装、从备份还原仍需主密码。
       </p>
@@ -405,42 +388,12 @@ interface AiProfile {
 
 const DEFAULT_AI_PROFILES: AiProfile[] = [
   {
-    id: 'local-ollama',
+    id: 'default',
     name: 'Local Ollama (默认)',
     provider: 'ollama',
     endpoint: 'http://127.0.0.1:11434/v1',
     model: 'qwen2.5:7b',
-    api_key: 'unused',
-    timeout: 60,
-    tunnel_hint: '',
-  },
-  {
-    id: 'deepseek',
-    name: 'DeepSeek 官方 API',
-    provider: 'deepseek',
-    endpoint: 'https://api.deepseek.com/v1',
-    model: 'deepseek-chat',
     api_key: '',
-    timeout: 60,
-    tunnel_hint: '',
-  },
-  {
-    id: 'siliconflow',
-    name: 'SiliconFlow 硅基流动',
-    provider: 'openai',
-    endpoint: 'https://api.siliconflow.cn/v1',
-    model: 'deepseek-ai/DeepSeek-V3',
-    api_key: '',
-    timeout: 60,
-    tunnel_hint: '',
-  },
-  {
-    id: 'local-vllm',
-    name: '本地 vLLM / LocalAI',
-    provider: 'openai',
-    endpoint: 'http://127.0.0.1:8000/v1',
-    model: 'qwen2.5-7b-instruct',
-    api_key: 'unused',
     timeout: 60,
     tunnel_hint: '',
   },
@@ -453,27 +406,59 @@ const siteSlogan = ref('')
 const translateSources = ref<{ id: string; name: string; note: string; need_key: boolean }[]>([])
 const translateSource = ref('youdao-dict')
 const pw = reactive({ old: '', next: '', confirm: '' })
-const auto = reactive({ enabled: false, keyOutsideData: true, keyPath: '' })
+const auto = reactive({ enabled: false, keyOutsideData: true })
 const locationOrigin = window.location.origin
 const shareItems = ref<{ token: string; target: string; ref: string; title: string; url: string; created: string }[]>([])
 
 // AI 多模型与多 Key 管理状态
 const aiEnabled = ref(true)
 const aiProfiles = ref<AiProfile[]>([])
-const activeProfileId = ref('local-ollama')
-const editingProfileId = ref('local-ollama')
+const activeProfileId = ref('default')
+const editingProfileId = ref('default')
 const currentEdit = reactive<AiProfile>({
-  id: 'local-ollama',
+  id: 'default',
   name: 'Local Ollama (默认)',
   provider: 'ollama',
   endpoint: 'http://127.0.0.1:11434/v1',
   model: 'qwen2.5:7b',
-  api_key: 'unused',
+  api_key: '',
   timeout: 60,
   tunnel_hint: '',
 })
 const aiTesting = ref(false)
-const aiTestResult = ref<{ ok: boolean; message: string; latency_ms?: number } | null>(null)
+const aiTestResult = ref<{ ok: boolean; message: string; latency_ms?: number; available_models?: string[] } | null>(null)
+const discoveredModels = ref<string[]>([])
+const discoveringModels = ref(false)
+
+async function discoverModels() {
+  if (!currentEdit.endpoint) {
+    ElMessage.warning('请先填写 API 服务地址 (Base URL)')
+    return
+  }
+  discoveringModels.value = true
+  try {
+    const res = await http.post<{ ok: boolean; models: string[] }>('/ai/discover-models', {
+      endpoint: currentEdit.endpoint,
+      api_key: currentEdit.api_key,
+    })
+    if (res.ok && res.models.length > 0) {
+      discoveredModels.value = res.models
+      currentEdit.model = res.models[0]
+      ElMessage.success(`拉取到 ${res.models.length} 个端点模型，已填入：${res.models[0]}`)
+    } else {
+      ElMessage.warning('未能从端点 /models 获取到模型列表，请确认服务地址或隧道状态')
+    }
+  } catch (e: any) {
+    ElMessage.error(e?.message || '拉取模型失败')
+  } finally {
+    discoveringModels.value = false
+  }
+}
+
+function applyDiscoveredModel(m: string) {
+  currentEdit.model = m
+  ElMessage.success(`已应用模型名称：${m}`)
+}
 
 function applyTheme(mode: string) {
   document.documentElement.classList.toggle('theme-dark', mode === 'dark')
@@ -523,11 +508,11 @@ function addNewProfile() {
   const newId = `profile-${Date.now().toString(36)}`
   const newProfile: AiProfile = {
     id: newId,
-    name: `新模型配置 ${aiProfiles.value.length + 1}`,
+    name: `模型配置 ${aiProfiles.value.length + 1}`,
     provider: 'openai',
-    endpoint: 'http://127.0.0.1:11434/v1',
-    model: 'qwen2.5:7b',
-    api_key: 'unused',
+    endpoint: '',
+    model: '',
+    api_key: '',
     timeout: 60,
     tunnel_hint: '',
   }
@@ -573,71 +558,6 @@ async function deleteProfile(id: string) {
   selectProfileToEdit(activeProfileId.value)
   await saveAiConfig(false)
   ElMessage.success('已删除该模型配置')
-}
-
-// 应用预设配置
-function applyPreset(type: string) {
-  if (type === 'deepseek') {
-    currentEdit.name = 'DeepSeek 官方 API'
-    currentEdit.provider = 'deepseek'
-    currentEdit.endpoint = 'https://api.deepseek.com/v1'
-    currentEdit.model = 'deepseek-chat'
-    if (currentEdit.api_key === 'unused') currentEdit.api_key = ''
-    ElMessage.info('已应用 DeepSeek 官方预设，请填入你的 API Key')
-  } else if (type === 'siliconflow') {
-    currentEdit.name = 'SiliconFlow 硅基流动'
-    currentEdit.provider = 'openai'
-    currentEdit.endpoint = 'https://api.siliconflow.cn/v1'
-    currentEdit.model = 'deepseek-ai/DeepSeek-V3'
-    if (currentEdit.api_key === 'unused') currentEdit.api_key = ''
-    ElMessage.info('已应用硅基流动预设，请填入你的 API Key')
-  } else if (type === 'ollama') {
-    currentEdit.name = 'Local Ollama (本地)'
-    currentEdit.provider = 'ollama'
-    currentEdit.endpoint = 'http://127.0.0.1:11434/v1'
-    currentEdit.model = 'qwen2.5:7b'
-    currentEdit.api_key = 'unused'
-    ElMessage.info('已应用本地 Ollama 预设')
-  } else if (type === 'vllm') {
-    currentEdit.name = '本地 vLLM / LocalAI'
-    currentEdit.provider = 'openai'
-    currentEdit.endpoint = 'http://127.0.0.1:8000/v1'
-    currentEdit.model = 'qwen2.5-7b-instruct'
-    currentEdit.api_key = 'unused'
-    ElMessage.info('已应用本地 vLLM 预设')
-  } else if (type === 'openai') {
-    currentEdit.name = 'OpenAI 兼容'
-    currentEdit.provider = 'openai'
-    currentEdit.endpoint = 'https://api.openai.com/v1'
-    currentEdit.model = 'gpt-4o-mini'
-    if (currentEdit.api_key === 'unused') currentEdit.api_key = ''
-    ElMessage.info('已应用 OpenAI 预设，请填入你的 API Key')
-  }
-}
-
-// 恢复为默认 Ollama 配置
-function resetToDefaultOllama() {
-  applyPreset('ollama')
-  saveAiConfig(true)
-}
-
-// 重置所有渠道为官方标准预设列表
-async function resetAllProfilesToDefault() {
-  try {
-    await ElMessageBox.confirm('确定要将所有模型配置重置为官方标准列表（包含 DeepSeek、Ollama、SiliconFlow 等）吗？现有自定义配置将被覆盖。', '重置确认', {
-      type: 'warning',
-      confirmButtonText: '确定重置',
-      cancelButtonText: '取消',
-    })
-  } catch {
-    return
-  }
-
-  aiProfiles.value = DEFAULT_AI_PROFILES.map((p) => ({ ...p }))
-  activeProfileId.value = DEFAULT_AI_PROFILES[0].id
-  selectProfileToEdit(DEFAULT_AI_PROFILES[0].id)
-  await saveAiConfig(false)
-  ElMessage.success('已重置为官方标准预设列表')
 }
 
 // 保存所有配置到后端数据库
@@ -701,19 +621,30 @@ async function testCurrentEdit() {
       model: string
       provider: string
       endpoint: string
+      available_models?: string[]
       reason: string
     }>('/ai/test', payload)
 
+    if (res.available_models && res.available_models.length > 0) {
+      discoveredModels.value = res.available_models
+    }
+
     if (res.ok) {
+      let msg = `连通成功！模型已就绪，响应延迟: ${res.latency_ms}ms`
+      if (!aiEnabled.value) {
+        msg += '（⚠️ 请注意：上方「启用 AI 服务」总开关当前已关闭，保存前请开启开关）'
+      }
       aiTestResult.value = {
         ok: true,
-        message: `连通成功！模型已就绪，响应延迟: ${res.latency_ms}ms`,
+        message: msg,
         latency_ms: res.latency_ms,
+        available_models: res.available_models,
       }
     } else {
       aiTestResult.value = {
         ok: false,
         message: res.reason || '无法连接到模型端点，请检查服务或隧道状态',
+        available_models: res.available_models,
       }
     }
   } catch (err: any) {
@@ -735,27 +666,22 @@ function loadAiSettings(cfg: Record<string, any>) {
     profiles = cfg['ai.profiles'].map((p: any) => ({
       id: String(p.id || `p-${Math.random()}`),
       name: String(p.name || '未命名配置'),
-      provider: String(p.provider || 'openai'),
-      endpoint: String(p.endpoint || 'http://127.0.0.1:11434/v1'),
-      model: String(p.model || 'qwen2.5:7b'),
-      api_key: String(p.api_key || 'unused'),
+      provider: 'openai',
+      endpoint: String(p.endpoint || ''),
+      model: String(p.model || ''),
+      api_key: String(p.api_key || ''),
       timeout: Number(p.timeout || 60),
       tunnel_hint: String(p.tunnel_hint || ''),
     }))
   } else {
     profiles = DEFAULT_AI_PROFILES.map((p) => ({ ...p }))
-    // 若历史有单键保存项且非默认占位符，予以合并
     const savedEp = cfg['ai.endpoint']
     const savedModel = cfg['ai.model']
-    if (savedEp && savedEp !== 'http://127.0.0.1:8000/v1') {
-      profiles[0].endpoint = savedEp
-    }
-    if (savedModel && savedModel !== 'qwen3.8-27b') {
-      profiles[0].model = savedModel
-    }
+    if (savedEp) profiles[0].endpoint = savedEp
+    if (savedModel) profiles[0].model = savedModel
     if (cfg['ai.api_key']) profiles[0].api_key = String(cfg['ai.api_key'])
-    if (cfg['ai.provider']) profiles[0].provider = String(cfg['ai.provider'])
     if (cfg['ai.timeout']) profiles[0].timeout = Number(cfg['ai.timeout'])
+    if (cfg['ai.tunnel_hint']) profiles[0].tunnel_hint = String(cfg['ai.tunnel_hint'])
   }
 
   aiProfiles.value = profiles
@@ -783,10 +709,9 @@ async function changePassword() {
 
 async function loadAuto() {
   try {
-    const r = await http.get<{ enabled: boolean; key_outside_data: boolean; key_path: string }>('/auth/auto-unlock')
+    const r = await http.get<{ enabled: boolean; key_outside_data: boolean }>('/auth/auto-unlock')
     auto.enabled = r.enabled
     auto.keyOutsideData = r.key_outside_data
-    auto.keyPath = r.key_path
   } catch { /* 401 会跳登录 */ }
 }
 
@@ -817,10 +742,9 @@ async function toggleAuto(v: any) {
     return
   }
   try {
-    const r = await http.post<{ key_outside_data: boolean; key_path: string }>('/auth/auto-unlock', { password: pwd })
+    const r = await http.post<{ key_outside_data: boolean }>('/auth/auto-unlock', { password: pwd })
     auto.enabled = true
     auto.keyOutsideData = r.key_outside_data
-    auto.keyPath = r.key_path
     ElMessage.success('已开启：服务器重启后不再需要输入主密码')
   } catch (e: any) {
     ElMessage.error(e?.response?.data?.detail || '开启失败')
@@ -910,13 +834,17 @@ onMounted(() => {
 .profile-option-item { display: flex; justify-content: space-between; align-items: center; width: 100%; }
 
 .test-feedback-box {
-  display: flex; align-items: center; gap: 8px; padding: 10px 14px; margin: 12px 0;
+  display: flex; align-items: flex-start; gap: 10px; padding: 10px 14px; margin: 12px 0;
   border-radius: 10px; background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.25);
   font-size: 13px; color: #ef4444; word-break: break-all;
 }
 .test-feedback-box.ok {
   background: rgba(16, 185, 129, 0.1); border-color: rgba(16, 185, 129, 0.25); color: #10b981;
 }
+.feedback-content { display: flex; flex-direction: column; gap: 6px; }
+.feedback-action-row { display: flex; align-items: center; gap: 8px; font-size: 12px; margin-top: 2px; }
+.clickable-model-tag { cursor: pointer; transition: transform 0.15s ease; }
+.clickable-model-tag:hover { transform: scale(1.03); }
 
 .profiles-tab-bar { display: flex; gap: 8px; overflow-x: auto; padding: 12px 0 10px; }
 .profile-tab-chip {
@@ -940,57 +868,6 @@ onMounted(() => {
 .editor-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; flex-wrap: wrap; gap: 8px; }
 .ed-title { font-weight: 700; font-size: 14px; display: flex; align-items: center; }
 .ed-actions { display: flex; align-items: center; gap: 6px; }
-
-.preset-quick-bar {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
-  padding: 10px 14px;
-  background: rgba(139, 92, 246, 0.08);
-  border: 1px dashed rgba(139, 92, 246, 0.25);
-  border-radius: 10px;
-  margin-bottom: 16px;
-}
-.preset-quick-title {
-  font-size: 12.5px;
-  font-weight: 600;
-  color: var(--txt2);
-}
-.preset-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-.preset-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 10px;
-  background: rgba(255, 255, 255, 0.05);
-  border: 1px solid rgba(148, 163, 184, 0.2);
-  border-radius: 6px;
-  font-size: 12px;
-  color: var(--txt);
-  cursor: pointer;
-  user-select: none;
-  transition: all 0.2s ease;
-}
-.preset-chip:hover {
-  background: rgba(139, 92, 246, 0.2);
-  border-color: var(--acc2);
-  transform: translateY(-1px);
-}
-.preset-chip-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-}
-.preset-chip-dot.ds { background: #0ea5e9; }
-.preset-chip-dot.sf { background: #8b5cf6; }
-.preset-chip-dot.ol { background: #10b981; }
-.preset-chip-dot.vl { background: #f59e0b; }
-.preset-chip-dot.oa { background: #10b981; }
 
 .ai-editor-form {
   margin-top: 10px;

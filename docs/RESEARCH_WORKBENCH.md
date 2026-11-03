@@ -19,9 +19,9 @@
 | 登录/鉴权/设置 | `routers/auth.py`、`routers/settings.py` | 所有新路由挂同一鉴权 |
 | 生词本复习逻辑 | `routers/vocab.py` | 卡片复习可借鉴其间隔重复思路 |
 
-**本地 AI 底座（已实测可用）**
-- vLLM 服务已在 `127.0.0.1:8000` 运行，模型 `qwen3.8-27b`（OpenAI 兼容 API，`/v1/chat/completions` 实测通过）
-- 机器 7×RTX 3090；Kruskal 只做本地客户端，数据不出服务器
+**本地 AI 底座（支持 OpenAI 兼容端点）**
+- 支持本地/远程部署的 vLLM、Ollama 等服务（如 `127.0.0.1:8000`），兼容 OpenAI API（`/v1/chat/completions`）
+- 建议配置独立 GPU 或推理服务器；Kruskal 作为客户端运行，数据不出本地部署环境
 - 前端划词翻译已存在（免费 API），未来可加「本地 LLM 翻译/解释」选项
 
 **明确不改动（红线）**

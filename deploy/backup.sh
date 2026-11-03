@@ -19,33 +19,37 @@ ENC="$OUT/kruskal-data-$STAMP.tar.gz.enc"
 PY_BIN="${KRUSKAL_PY:-python3}"
 [ -x "$PY_BIN" ] || PY_BIN="$(command -v python3 || command -v python || echo python3)"
 
+DATA_DIR="${KRUSKAL_DATA_DIR:-${KRUSKAL_DATA:-backend/data}}"
+DATA_PARENT="$(dirname "$DATA_DIR")"
+DATA_BASENAME="$(basename "$DATA_DIR")"
+
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
 # 1) SQLite 一致性快照（含 WAL 中未 checkpoint 的数据）
-if [ -f backend/data/site.db ]; then
-  "$PY_BIN" - "$WORK/site.db" <<'PYEOF'
+if [ -f "$DATA_DIR/site.db" ]; then
+  "$PY_BIN" - "$WORK/site.db" "$DATA_DIR/site.db" <<'PYEOF'
 import sqlite3, sys
 dst = sqlite3.connect(sys.argv[1])
-src = sqlite3.connect("backend/data/site.db")
+src = sqlite3.connect(sys.argv[2])
 with dst:
     src.backup(dst)
 src.close(); dst.close()
 print("[backup] sqlite 快照完成（WAL 已并入）")
 PYEOF
 else
-  echo "[backup] 提示: backend/data/site.db 不存在（首次备份前请至少启动一次服务）" >&2
+  echo "[backup] 提示: $DATA_DIR/site.db 不存在（首次备份前请至少启动一次服务）" >&2
 fi
 
 # 2) 打 tar：排除运行残留；活动库换成快照（成员名保持 data/... 前缀，restore.sh 依赖此约定）
 # 注意：GNU tar 的 --exclude 必须放在目录操作数之前，否则报 "has no effect"
 tar -cf "$WORK/data.tar" \
-  --exclude data/tmp --exclude data/.git --exclude 'data/site.db*' \
-  -C backend data
+  --exclude "$DATA_BASENAME/tmp" --exclude "$DATA_BASENAME/.git" --exclude "$DATA_BASENAME/site.db*" \
+  -C "$DATA_PARENT" "$DATA_BASENAME"
 if [ -f "$WORK/site.db" ]; then
-  mkdir -p "$WORK/stage/data"
-  mv "$WORK/site.db" "$WORK/stage/data/site.db"
-  tar -rf "$WORK/data.tar" -C "$WORK/stage" data
+  mkdir -p "$WORK/stage/$DATA_BASENAME"
+  mv "$WORK/site.db" "$WORK/stage/$DATA_BASENAME/site.db"
+  tar -rf "$WORK/data.tar" -C "$WORK/stage" "$DATA_BASENAME"
 fi
 gzip -c "$WORK/data.tar" > "$WORK/data.tar.gz"
 
