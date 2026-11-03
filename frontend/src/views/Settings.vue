@@ -193,48 +193,131 @@
             </div>
           </div>
 
-          <div class="form-grid">
-            <el-form-item label="配置显示名称">
-              <el-input v-model="currentEdit.name" placeholder="例如：Local Ollama / DeepSeek API" />
-            </el-form-item>
-
-            <el-form-item label="渠道类型 / 提供商">
-              <el-select v-model="currentEdit.provider" placeholder="选择或输入渠道" filterable allow-create style="width:100%">
-                <el-option label="ollama (本地运行)" value="ollama" />
-                <el-option label="openai (标准兼容格式)" value="openai" />
-                <el-option label="deepseek (深度求索 API)" value="deepseek" />
-                <el-option label="vllm (本地推理)" value="vllm" />
-              </el-select>
-            </el-form-item>
-
-            <el-form-item label="服务地址 Endpoint（OpenAI 兼容）">
-              <el-input v-model="currentEdit.endpoint" placeholder="http://127.0.0.1:11434/v1" />
-            </el-form-item>
-
-            <el-form-item label="模型 ID">
-              <el-input v-model="currentEdit.model" placeholder="qwen2.5:7b" />
-            </el-form-item>
-
-            <el-form-item label="API 密钥（Key）">
-              <el-input
-                v-model="currentEdit.api_key"
-                type="password"
-                show-password
-                placeholder="本地推理填 unused，云端填 sk-..."
-              />
-            </el-form-item>
-
-            <el-form-item label="超时时间（秒）">
-              <el-input-number v-model="currentEdit.timeout" :min="10" :max="600" style="width: 100%" />
-            </el-form-item>
-
-            <el-form-item label="SSH 隧道启动提示（可选）" style="grid-column: 1 / -1">
-              <el-input
-                v-model="currentEdit.tunnel_hint"
-                placeholder="例如：ssh -N -L 11434:localhost:11434 user@your-server"
-              />
-            </el-form-item>
+          <!-- 工业标准渠道快速预设 (类似 ccswitch / deepseek-harness) -->
+          <div class="preset-quick-bar">
+            <span class="preset-quick-title">标准渠道快速预设：</span>
+            <div class="preset-chips">
+              <span class="preset-chip" @click="applyPreset('deepseek')">
+                <span class="preset-chip-dot ds"></span>DeepSeek 官方 API
+              </span>
+              <span class="preset-chip" @click="applyPreset('siliconflow')">
+                <span class="preset-chip-dot sf"></span>SiliconFlow 硅基流动
+              </span>
+              <span class="preset-chip" @click="applyPreset('ollama')">
+                <span class="preset-chip-dot ol"></span>Local Ollama (本地)
+              </span>
+              <span class="preset-chip" @click="applyPreset('vllm')">
+                <span class="preset-chip-dot vl"></span>Local vLLM / LocalAI
+              </span>
+              <span class="preset-chip" @click="applyPreset('openai')">
+                <span class="preset-chip-dot oa"></span>OpenAI 兼容
+              </span>
+            </div>
           </div>
+
+          <!-- 标准表单区 -->
+          <el-form label-position="top" class="ai-editor-form" @submit.prevent>
+            <!-- Row 1: 显示名称 + 渠道类型 -->
+            <div class="form-row-2">
+              <el-form-item label="配置显示名称">
+                <el-input v-model="currentEdit.name" placeholder="例如：DeepSeek 官方 API / Local Ollama" />
+              </el-form-item>
+
+              <el-form-item label="渠道类型 / 提供商">
+                <el-select v-model="currentEdit.provider" placeholder="选择渠道协议" style="width:100%">
+                  <el-option label="openai (标准兼容格式)" value="openai" />
+                  <el-option label="deepseek (深度求索 DeepSeek)" value="deepseek" />
+                  <el-option label="ollama (本地 Ollama)" value="ollama" />
+                  <el-option label="vllm (本地 vLLM)" value="vllm" />
+                </el-select>
+              </el-form-item>
+            </div>
+
+            <!-- Row 2: 服务地址 Base URL (独占整行，通栏大输入框，醒目无遮挡) -->
+            <div class="form-row-1">
+              <el-form-item label="API 服务地址 (Base URL / Endpoint)">
+                <el-input
+                  v-model="currentEdit.endpoint"
+                  size="large"
+                  clearable
+                  placeholder="https://api.deepseek.com/v1 或 http://127.0.0.1:11434/v1"
+                >
+                  <template #prefix>
+                    <el-icon><Link /></el-icon>
+                  </template>
+                </el-input>
+                <div class="field-hint">
+                  <el-icon><Check /></el-icon>
+                  <span>遵循标准 OpenAI 兼容协议。可直接粘贴 Base URL（末尾 <code>/v1</code> 自动补齐，多余路径自动规范化）。</span>
+                </div>
+              </el-form-item>
+            </div>
+
+            <!-- Row 3: API 密钥 + 模型 ID -->
+            <div class="form-row-2">
+              <el-form-item label="API 密钥 (API Key)">
+                <el-input
+                  v-model="currentEdit.api_key"
+                  type="password"
+                  show-password
+                  clearable
+                  placeholder="云端服务填 sk-...，本地 Ollama 填 unused"
+                >
+                  <template #prefix>
+                    <el-icon><Key /></el-icon>
+                  </template>
+                </el-input>
+                <div class="field-hint-sub">本地 Ollama / vLLM 无需 key，保留 <code>unused</code> 即可。</div>
+              </el-form-item>
+
+              <el-form-item label="模型 ID (Model ID)">
+                <el-select
+                  v-model="currentEdit.model"
+                  filterable
+                  allow-create
+                  default-first-option
+                  placeholder="选择常用推荐模型或直接键盘输入"
+                  style="width: 100%"
+                >
+                  <el-option-group label="DeepSeek 官方推荐">
+                    <el-option label="deepseek-chat (通用对话 / V3)" value="deepseek-chat" />
+                    <el-option label="deepseek-reasoner (深度思考推理 / R1)" value="deepseek-reasoner" />
+                  </el-option-group>
+                  <el-option-group label="硅基流动 SiliconFlow 推荐">
+                    <el-option label="deepseek-ai/DeepSeek-V3" value="deepseek-ai/DeepSeek-V3" />
+                    <el-option label="deepseek-ai/DeepSeek-R1" value="deepseek-ai/DeepSeek-R1" />
+                    <el-option label="Qwen/Qwen2.5-7B-Instruct" value="Qwen/Qwen2.5-7B-Instruct" />
+                  </el-option-group>
+                  <el-option-group label="本地 Ollama / vLLM 常用">
+                    <el-option label="qwen2.5:7b" value="qwen2.5:7b" />
+                    <el-option label="qwen2.5:14b" value="qwen2.5:14b" />
+                    <el-option label="deepseek-r1:7b" value="deepseek-r1:7b" />
+                    <el-option label="deepseek-r1:8b" value="deepseek-r1:8b" />
+                    <el-option label="llama3.1:8b" value="llama3.1:8b" />
+                  </el-option-group>
+                  <el-option-group label="OpenAI 官方">
+                    <el-option label="gpt-4o-mini" value="gpt-4o-mini" />
+                    <el-option label="gpt-4o" value="gpt-4o" />
+                  </el-option-group>
+                </el-select>
+                <div class="field-hint-sub">可直接键盘输入任何私有量化或部署的模型标识</div>
+              </el-form-item>
+            </div>
+
+            <!-- Row 4: 超时时间 + SSH 隧道命令 -->
+            <div class="form-row-2">
+              <el-form-item label="超时时间（秒）">
+                <el-input-number v-model="currentEdit.timeout" :min="10" :max="600" style="width: 100%" />
+              </el-form-item>
+
+              <el-form-item label="SSH 端口转发隧道命令（可选，远程服务器映射）">
+                <el-input
+                  v-model="currentEdit.tunnel_hint"
+                  placeholder="例如：ssh -N -L 11434:localhost:11434 user@your-server"
+                />
+              </el-form-item>
+            </div>
+          </el-form>
 
           <div class="editor-footer">
             <el-button type="primary" @click="saveAiConfig(true)">
@@ -243,8 +326,8 @@
             <el-button :loading="aiTesting" @click="testCurrentEdit">
               测试此配置
             </el-button>
-            <el-button text @click="resetToDefaultOllama">
-              恢复为默认本地 Ollama 配置
+            <el-button text @click="resetAllProfilesToDefault">
+              重置为标准官方预设列表
             </el-button>
           </div>
         </div>
@@ -332,22 +415,32 @@ const DEFAULT_AI_PROFILES: AiProfile[] = [
     tunnel_hint: '',
   },
   {
-    id: 'local-vllm',
-    name: '本地 vLLM / LocalAI',
-    provider: 'openai',
-    endpoint: 'http://127.0.0.1:8000/v1',
-    model: 'qwen2.5-7b-instruct',
-    api_key: 'unused',
-    timeout: 60,
-    tunnel_hint: '',
-  },
-  {
     id: 'deepseek',
     name: 'DeepSeek 官方 API',
     provider: 'deepseek',
     endpoint: 'https://api.deepseek.com/v1',
     model: 'deepseek-chat',
     api_key: '',
+    timeout: 60,
+    tunnel_hint: '',
+  },
+  {
+    id: 'siliconflow',
+    name: 'SiliconFlow 硅基流动',
+    provider: 'openai',
+    endpoint: 'https://api.siliconflow.cn/v1',
+    model: 'deepseek-ai/DeepSeek-V3',
+    api_key: '',
+    timeout: 60,
+    tunnel_hint: '',
+  },
+  {
+    id: 'local-vllm',
+    name: '本地 vLLM / LocalAI',
+    provider: 'openai',
+    endpoint: 'http://127.0.0.1:8000/v1',
+    model: 'qwen2.5-7b-instruct',
+    api_key: 'unused',
     timeout: 60,
     tunnel_hint: '',
   },
@@ -482,16 +575,69 @@ async function deleteProfile(id: string) {
   ElMessage.success('已删除该模型配置')
 }
 
+// 应用预设配置
+function applyPreset(type: string) {
+  if (type === 'deepseek') {
+    currentEdit.name = 'DeepSeek 官方 API'
+    currentEdit.provider = 'deepseek'
+    currentEdit.endpoint = 'https://api.deepseek.com/v1'
+    currentEdit.model = 'deepseek-chat'
+    if (currentEdit.api_key === 'unused') currentEdit.api_key = ''
+    ElMessage.info('已应用 DeepSeek 官方预设，请填入你的 API Key')
+  } else if (type === 'siliconflow') {
+    currentEdit.name = 'SiliconFlow 硅基流动'
+    currentEdit.provider = 'openai'
+    currentEdit.endpoint = 'https://api.siliconflow.cn/v1'
+    currentEdit.model = 'deepseek-ai/DeepSeek-V3'
+    if (currentEdit.api_key === 'unused') currentEdit.api_key = ''
+    ElMessage.info('已应用硅基流动预设，请填入你的 API Key')
+  } else if (type === 'ollama') {
+    currentEdit.name = 'Local Ollama (本地)'
+    currentEdit.provider = 'ollama'
+    currentEdit.endpoint = 'http://127.0.0.1:11434/v1'
+    currentEdit.model = 'qwen2.5:7b'
+    currentEdit.api_key = 'unused'
+    ElMessage.info('已应用本地 Ollama 预设')
+  } else if (type === 'vllm') {
+    currentEdit.name = '本地 vLLM / LocalAI'
+    currentEdit.provider = 'openai'
+    currentEdit.endpoint = 'http://127.0.0.1:8000/v1'
+    currentEdit.model = 'qwen2.5-7b-instruct'
+    currentEdit.api_key = 'unused'
+    ElMessage.info('已应用本地 vLLM 预设')
+  } else if (type === 'openai') {
+    currentEdit.name = 'OpenAI 兼容'
+    currentEdit.provider = 'openai'
+    currentEdit.endpoint = 'https://api.openai.com/v1'
+    currentEdit.model = 'gpt-4o-mini'
+    if (currentEdit.api_key === 'unused') currentEdit.api_key = ''
+    ElMessage.info('已应用 OpenAI 预设，请填入你的 API Key')
+  }
+}
+
 // 恢复为默认 Ollama 配置
 function resetToDefaultOllama() {
-  currentEdit.name = 'Local Ollama (默认)'
-  currentEdit.provider = 'ollama'
-  currentEdit.endpoint = 'http://127.0.0.1:11434/v1'
-  currentEdit.model = 'qwen2.5:7b'
-  currentEdit.api_key = 'unused'
-  currentEdit.timeout = 60
-  currentEdit.tunnel_hint = ''
+  applyPreset('ollama')
   saveAiConfig(true)
+}
+
+// 重置所有渠道为官方标准预设列表
+async function resetAllProfilesToDefault() {
+  try {
+    await ElMessageBox.confirm('确定要将所有模型配置重置为官方标准列表（包含 DeepSeek、Ollama、SiliconFlow 等）吗？现有自定义配置将被覆盖。', '重置确认', {
+      type: 'warning',
+      confirmButtonText: '确定重置',
+      cancelButtonText: '取消',
+    })
+  } catch {
+    return
+  }
+
+  aiProfiles.value = DEFAULT_AI_PROFILES.map((p) => ({ ...p }))
+  activeProfileId.value = DEFAULT_AI_PROFILES[0].id
+  selectProfileToEdit(DEFAULT_AI_PROFILES[0].id)
+  await saveAiConfig(false)
+  ElMessage.success('已重置为官方标准预设列表')
 }
 
 // 保存所有配置到后端数据库
@@ -790,10 +936,114 @@ onMounted(() => {
   text-overflow: ellipsis; white-space: nowrap;
 }
 
-.profile-editor-box { margin-top: 14px; padding: 16px; background: rgba(0, 0, 0, 0.2); border-radius: 12px; }
-.editor-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; flex-wrap: wrap; gap: 8px; }
+.profile-editor-box { margin-top: 14px; padding: 18px 20px; background: rgba(0, 0, 0, 0.25); border-radius: 12px; border: 1px solid rgba(148, 163, 184, 0.15); }
+.editor-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; flex-wrap: wrap; gap: 8px; }
 .ed-title { font-weight: 700; font-size: 14px; display: flex; align-items: center; }
 .ed-actions { display: flex; align-items: center; gap: 6px; }
+
+.preset-quick-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 10px 14px;
+  background: rgba(139, 92, 246, 0.08);
+  border: 1px dashed rgba(139, 92, 246, 0.25);
+  border-radius: 10px;
+  margin-bottom: 16px;
+}
+.preset-quick-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--txt2);
+}
+.preset-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.preset-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 6px;
+  font-size: 12px;
+  color: var(--txt);
+  cursor: pointer;
+  user-select: none;
+  transition: all 0.2s ease;
+}
+.preset-chip:hover {
+  background: rgba(139, 92, 246, 0.2);
+  border-color: var(--acc2);
+  transform: translateY(-1px);
+}
+.preset-chip-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+}
+.preset-chip-dot.ds { background: #0ea5e9; }
+.preset-chip-dot.sf { background: #8b5cf6; }
+.preset-chip-dot.ol { background: #10b981; }
+.preset-chip-dot.vl { background: #f59e0b; }
+.preset-chip-dot.oa { background: #10b981; }
+
+.ai-editor-form {
+  margin-top: 10px;
+}
+.form-row-1 {
+  width: 100%;
+  margin-bottom: 4px;
+}
+.form-row-1 :deep(.el-form-item) {
+  width: 100%;
+  margin-bottom: 14px;
+}
+.form-row-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin-bottom: 4px;
+}
+.form-row-2 :deep(.el-form-item) {
+  margin-bottom: 14px;
+}
+@media (max-width: 640px) {
+  .form-row-2 {
+    grid-template-columns: 1fr;
+    gap: 0;
+  }
+}
+.field-hint {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--txt3);
+  margin-top: 6px;
+  line-height: 1.4;
+}
+.field-hint code {
+  background: rgba(139, 92, 246, 0.15);
+  padding: 1px 5px;
+  border-radius: 4px;
+  color: var(--txt);
+}
+.field-hint-sub {
+  font-size: 11.5px;
+  color: var(--txt3);
+  margin-top: 4px;
+}
+.field-hint-sub code {
+  background: rgba(139, 92, 246, 0.12);
+  padding: 1px 4px;
+  border-radius: 4px;
+}
+
 .editor-footer { display: flex; align-items: center; gap: 12px; margin-top: 16px; flex-wrap: wrap; }
 
 .src-list { display: grid; gap: 8px; margin-bottom: 14px; }

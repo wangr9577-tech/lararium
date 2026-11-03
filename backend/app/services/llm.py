@@ -53,22 +53,32 @@ DEFAULT_PROFILES = [
         "tunnel_hint": "",
     },
     {
-        "id": "local-vllm",
-        "name": "本地 vLLM / Ollama",
-        "provider": "openai",
-        "endpoint": "http://127.0.0.1:8000/v1",
-        "model": "qwen2.5-7b-instruct",
-        "api_key": "unused",
-        "timeout": 60,
-        "tunnel_hint": "",
-    },
-    {
         "id": "deepseek",
         "name": "DeepSeek 官方 API",
         "provider": "deepseek",
         "endpoint": "https://api.deepseek.com/v1",
         "model": "deepseek-chat",
         "api_key": "",
+        "timeout": 60,
+        "tunnel_hint": "",
+    },
+    {
+        "id": "siliconflow",
+        "name": "SiliconFlow 硅基流动",
+        "provider": "openai",
+        "endpoint": "https://api.siliconflow.cn/v1",
+        "model": "deepseek-ai/DeepSeek-V3",
+        "api_key": "",
+        "timeout": 60,
+        "tunnel_hint": "",
+    },
+    {
+        "id": "local-vllm",
+        "name": "本地 vLLM / LocalAI",
+        "provider": "openai",
+        "endpoint": "http://127.0.0.1:8000/v1",
+        "model": "qwen2.5-7b-instruct",
+        "api_key": "unused",
         "timeout": 60,
         "tunnel_hint": "",
     },
@@ -136,7 +146,29 @@ def is_enabled() -> bool:
     return _cfg()["enabled"]
 
 
+def normalize_endpoint(url: str) -> str:
+    """标准 OpenAI 兼容 Endpoint 规范化：
+    1. 去除两端空白与尾部斜杠；
+    2. 若未带协议头，默认补充 http://；
+    3. 若以 /chat/completions 或 /models 结尾，剥离为 Base URL；
+    4. 若未以 /v1 结尾且非特定第三方多级路径，自动规范化补齐 /v1。
+    """
+    u = (url or "").strip().rstrip("/")
+    if not u:
+        return ""
+    if not (u.startswith("http://") or u.startswith("https://")):
+        u = "http://" + u
+    if u.endswith("/chat/completions"):
+        u = u[:-len("/chat/completions")].rstrip("/")
+    elif u.endswith("/models"):
+        u = u[:-len("/models")].rstrip("/")
+    if not (u.endswith("/v1") or "/v1/" in u or u.endswith("/v1beta") or "/api/" in u):
+        u = u + "/v1"
+    return u
+
+
 def _do_request(cfg: dict, messages: list[dict], max_tokens: int, temperature: float) -> str:
+    endpoint = normalize_endpoint(cfg.get("endpoint") or "")
     body = json.dumps({
         "model": cfg["model"],
         "messages": messages,
@@ -144,10 +176,10 @@ def _do_request(cfg: dict, messages: list[dict], max_tokens: int, temperature: f
         "temperature": temperature,
     }).encode("utf-8")
     headers = {"Content-Type": "application/json"}
-    if cfg.get("api_key"):
+    if cfg.get("api_key") and cfg["api_key"] != "unused":
         headers["Authorization"] = f"Bearer {cfg['api_key']}"
     req = urllib.request.Request(
-        cfg["endpoint"].rstrip("/") + "/chat/completions",
+        f"{endpoint}/chat/completions",
         data=body,
         headers=headers,
         method="POST",
@@ -320,7 +352,7 @@ def check_diagnostics(override_cfg: dict | None = None) -> dict:
     else:
         cfg = _cfg()
 
-    endpoint = cfg["endpoint"].rstrip("/")
+    endpoint = normalize_endpoint(cfg.get("endpoint") or "")
     model = cfg["model"]
     provider = cfg["provider"]
     tunnel_hint = cfg["tunnel_hint"]
