@@ -6,6 +6,7 @@ import json
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
+from .. import config
 from ..auth import get_current
 from ..db import db
 
@@ -17,9 +18,18 @@ class SettingsIn(BaseModel):
 
 
 def _load() -> dict:
+    """优先从受 .gitignore 保护的独立本地配置文件读取；若不存在则查 sqlite。"""
+    if config.LOCAL_SETTINGS_PATH.is_file():
+        try:
+            local_data = json.loads(config.LOCAL_SETTINGS_PATH.read_text(encoding="utf-8"))
+            if isinstance(local_data, dict) and len(local_data) > 0:
+                return local_data
+        except Exception:
+            pass
+
+    out = {}
     with db() as conn:
         rows = conn.execute("SELECT key, value FROM settings").fetchall()
-    out = {}
     for r in rows:
         try:
             out[r["key"]] = json.loads(r["value"])
@@ -42,4 +52,25 @@ def put_settings(body: SettingsIn, _user: dict = Depends(get_current)):
                 "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                 (key, json.dumps(value, ensure_ascii=False)),
             )
-    return _load()
+
+    # 重新从 DB 取出所有设置项
+    latest = {}
+    with db() as conn:
+        rows = conn.execute("SELECT key, value FROM settings").fetchall()
+    for r in rows:
+        try:
+            latest[r["key"]] = json.loads(r["value"])
+        except (json.JSONDecodeError, TypeError):
+            latest[r["key"]] = r["value"]
+
+    # 安全同步写入受 .gitignore 严格忽略的独立本地配置文件 local_settings.json
+    try:
+        config.DATA_DIR.mkdir(parents=True, exist_ok=True)
+        config.LOCAL_SETTINGS_PATH.write_text(
+            json.dumps(latest, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
+
+    return latest

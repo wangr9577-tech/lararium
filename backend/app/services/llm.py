@@ -24,15 +24,37 @@ class AiUnavailable(Exception):
 
 
 def _settings_ai() -> dict:
-    """从 settings 表读 AI 配置（避免循环依赖，直接查 sqlite）。"""
+    """读取 AI 配置：
+    1. 优先从受 .gitignore 保护的独立本地私有配置文件（local_settings.json）读取；
+    2. 若未配置则从 settings 数据库读取；
+    3. 保证用户的 API Key、端点和模型信息仅存留在本地专属私有文件，绝不进入 Git 代码。
+    """
+    out = {}
+
+    # 1. 尝试从本地私有配置文件读取
+    if hasattr(config, "LOCAL_SETTINGS_PATH") and config.LOCAL_SETTINGS_PATH.is_file():
+        try:
+            raw = json.loads(config.LOCAL_SETTINGS_PATH.read_text(encoding="utf-8"))
+            if isinstance(raw, dict):
+                for k, v in raw.items():
+                    if k.startswith("ai."):
+                        out[k] = v
+        except Exception:
+            pass
+
+    # 2. 如果本地文件读取到了完整的配置，直接返回
+    if out.get("ai.profiles") or out.get("ai.endpoint"):
+        return out
+
+    # 3. 否则读取本地 SQLite 数据库
     import sqlite3
     try:
         conn = sqlite3.connect(config.DB_PATH)
         rows = conn.execute("SELECT key, value FROM settings WHERE key LIKE 'ai.%'").fetchall()
         conn.close()
     except sqlite3.Error:
-        return {}
-    out = {}
+        return out
+
     for k, v in rows:
         try:
             out[k] = json.loads(v)

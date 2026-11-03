@@ -19,6 +19,9 @@ PORT = int(os.environ.get("KRUSKAL_PORT", "18080"))
 
 DIST_DIR = REPO_ROOT / "frontend" / "dist"
 DB_PATH = DATA_DIR / "site.db"
+# 本地私有配置文件：存储用户在前端填写的私有设置（AI 渠道、API 密钥、个人配置等），
+# 独立于代码文件落盘在 DATA_DIR 中，受 .gitignore 绝对忽略，严禁上传到 Git
+LOCAL_SETTINGS_PATH = DATA_DIR / "local_settings.json"
 KEYWRAP_PATH = DATA_DIR / ".kek"                # 数据密钥包裹文件（由主密码派生密钥加密）
 KEYWRAP_JOURNAL = DATA_DIR / ".kek.journal"     # 改密两阶段日志：记新包裹，DB 提交成功后才 rename 覆盖
 INIT_PW_FILE = DATA_DIR / "initial_password.txt"
@@ -94,9 +97,10 @@ def ensure_layout() -> None:
 def rebind_data_dir(new_data_dir: Path | str) -> None:
     """动态重定向数据目录（支持测试隔离、沙箱迁移与多套件级联测试）。"""
     global DATA_DIR, DB_PATH, KEYWRAP_PATH, KEYWRAP_JOURNAL, INIT_PW_FILE, TMP_DIR
-    global AUTOKEY_WRAP, AUTOKEY_KEY
+    global AUTOKEY_WRAP, AUTOKEY_KEY, LOCAL_SETTINGS_PATH
     DATA_DIR = Path(new_data_dir)
     DB_PATH = DATA_DIR / "site.db"
+    LOCAL_SETTINGS_PATH = DATA_DIR / "local_settings.json"
     KEYWRAP_PATH = DATA_DIR / ".kek"
     KEYWRAP_JOURNAL = DATA_DIR / ".kek.journal"
     INIT_PW_FILE = DATA_DIR / "initial_password.txt"

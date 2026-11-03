@@ -30,22 +30,28 @@ kruskal_*_test_*
 frontend/pnpm-lock.yaml
 frontend/pnpm-workspace.yaml
 
-# 数据、密钥与运行产物
+# 数据、密钥与运行产物（包含用户全部个人数据、密码包裹与加密库，绝不上云）
 data/
 backend/data/
 backend/.autokey
 *.enc
 *.key
+*.kek*
 initial_password.txt
 *.log
 backend/*.log
 backend/server.log
 backups/
 nohup.out
+*.db
+*.sqlite
+*.sqlite3
 
-# 编辑器与系统文件
-.vscode/
-.idea/
-.DS_Store
-Thumbs.db
+# 本地私有配置文件（存放私有 API Key、模型端点、密码与个性化设置，绝对不入 Git）
+local_settings.json
+config.local.json
+*.local.json
+*.local.env
 .env
+.env.local
+.env.*.local
