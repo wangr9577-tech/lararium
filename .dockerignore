@@ -1,0 +1,13 @@
+.git
+.github
+data
+tmp
+**/__pycache__
+**/*.pyc
+node_modules
+frontend/node_modules
+frontend/dist
+kruskal_*_test_*
+scratch
+.DS_Store
+*.log

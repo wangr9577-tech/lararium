@@ -1,0 +1,21 @@
+version: '3.8'
+
+services:
+  kruskal:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: kruskal-app
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - KRUSKAL_DATA_DIR=/app/data
+      - KRUSKAL_DEV_USER=admin
+      - KRUSKAL_DEV_PASSWORD=admin
+    volumes:
+      - kruskal_data:/app/data
+
+volumes:
+  kruskal_data:
+    driver: local
