@@ -165,19 +165,41 @@ async def upload_photos(album_id: str, files: list[UploadFile] = File(...),
         raise HTTPException(404, "相册不存在")
     if len(files) > 30:
         raise HTTPException(400, "一次最多上传 30 张")
-    items = _load_photos(album_id)
-    added = []
+
+    # 预校验所有文件的扩展名
     for f in files:
         name = (f.filename or "").lower()
         ext = name.rsplit(".", 1)[-1] if "." in name else ""
         if ext not in EXT_OK:
             raise HTTPException(400, f"{f.filename} 不是支持的图片（jpg/png/webp/gif）")
-        raw = await read_upload(f, MAX_PHOTO, too_big=f"{f.filename} 超过 20MB 上限")
-        pid = uuid.uuid4().hex[:8]
-        vault.write_bytes(_album_dir(album_id) / f"{pid}.{ext}", raw)
-        items.append({"id": pid, "ext": ext, "added": _now()})
-        added.append({"id": pid, "ext": ext, "added": items[-1]["added"]})
-    _save_photos(album_id, items)
+
+    items = _load_photos(album_id)
+    existing_ids = {p["id"] for p in items}
+    added = []
+    created_paths = []
+    try:
+        for f in files:
+            name = (f.filename or "").lower()
+            ext = name.rsplit(".", 1)[-1]
+            raw = await read_upload(f, MAX_PHOTO, too_big=f"{f.filename} 超过 20MB 上限")
+            pid = uuid.uuid4().hex[:8]
+            while pid in existing_ids:
+                pid = uuid.uuid4().hex[:8]
+            existing_ids.add(pid)
+            dest = _album_dir(album_id) / f"{pid}.{ext}"
+            vault.write_bytes(dest, raw)
+            created_paths.append(dest)
+            items.append({"id": pid, "ext": ext, "added": _now()})
+            added.append({"id": pid, "ext": ext, "added": items[-1]["added"]})
+        _save_photos(album_id, items)
+    except Exception:
+        for p in created_paths:
+            try:
+                if p.is_file():
+                    p.unlink()
+            except OSError:
+                pass
+        raise
     return {"added": added}
 
 

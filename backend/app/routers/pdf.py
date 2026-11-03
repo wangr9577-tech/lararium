@@ -15,6 +15,7 @@ import json
 import re
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from starlette.concurrency import run_in_threadpool
 
 from ..auth import get_current
 from ..upload import read_upload
@@ -29,20 +30,7 @@ DPI = 120                          # 渲染 DPI（A4 ≈ 1000×1400，单页 JPE
 JPEG_QUALITY = 80
 
 
-@router.post("/import")
-async def import_pdf(
-    request: Request,
-    file: UploadFile = File(...),
-    folder: str = Form(""),
-    _user: dict = Depends(get_current),
-):
-    name = (file.filename or "").strip()
-    if not name.lower().endswith(".pdf"):
-        raise HTTPException(400, "仅支持 PDF 文件（.pdf）")
-    data = await read_upload(file, MAX_FILE, request=request, too_big="PDF 文件过大（上限 50MB）")
-    if not data:
-        raise HTTPException(400, "空文件")
-
+def _render_pdf_to_pages(data: bytes) -> list[dict]:
     try:
         try:
             import pymupdf as fitz  # PyMuPDF ≥1.24 的模块名（1.28 起旧别名 fitz 已弃用）
@@ -87,8 +75,26 @@ async def import_pdf(
                             "src": f"data:image/jpeg;base64,{b64}"}],
                 "strokes": [],
             })
+        return pages
     finally:
         doc.close()
+
+
+@router.post("/import")
+async def import_pdf(
+    request: Request,
+    file: UploadFile = File(...),
+    folder: str = Form(""),
+    _user: dict = Depends(get_current),
+):
+    name = (file.filename or "").strip()
+    if not name.lower().endswith(".pdf"):
+        raise HTTPException(400, "仅支持 PDF 文件（.pdf）")
+    data = await read_upload(file, MAX_FILE, request=request, too_big="PDF 文件过大（上限 50MB）")
+    if not data:
+        raise HTTPException(400, "空文件")
+
+    pages = await run_in_threadpool(_render_pdf_to_pages, data)
 
     title = re.sub(r"\.pdf$", "", name, flags=re.I).strip() or "PDF 笔记"
     if len(title) > 100:

@@ -16,6 +16,7 @@ from io import BytesIO
 from xml.sax.saxutils import escape
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from starlette.concurrency import run_in_threadpool
 
 from ..auth import get_current
 from ..upload import read_upload
@@ -24,6 +25,8 @@ from . import notes as notes_mod
 router = APIRouter(prefix="/api/ppt", tags=["ppt"])
 
 MAX_FILE = 50 * 1024 * 1024
+MAX_PAGES = 80
+MAX_TOTAL_IMG = 30 * 1024 * 1024   # 渲染后图像/矢量总量上限（防撑爆笔记文件）
 PX_PER_EMU = 96 / 914400  # 1 EMU = 1/914400 in，输出按 96dpi
 MIME = {
     "png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
@@ -294,6 +297,45 @@ def _slide_svg(prs, slide) -> tuple[str, int, int]:
     return svg, max(1, round(w)), max(1, round(h))
 
 
+def _render_ppt_to_pages(data: bytes) -> list[dict]:
+    try:
+        from pptx import Presentation
+        prs = Presentation(BytesIO(data))
+    except Exception as e:
+        raise HTTPException(400, f"PPT 解析失败（可能已损坏或含加密）：{str(e)[:120]}")
+
+    total = len(prs.slides._sldIdLst)
+    if not total:
+        raise HTTPException(400, "PPT 中没有幻灯片")
+    if total > MAX_PAGES:
+        raise HTTPException(400, f"PPT 共 {total} 页，超过上限 {MAX_PAGES} 页（可拆分后再导入）")
+
+    pages = []
+    img_total = 0
+    for slide in prs.slides:
+        try:
+            svg, wpx, hpx = _slide_svg(prs, slide)
+        except Exception as e:
+            raise HTTPException(500, f"第 {len(pages) + 1} 页转换失败：{str(e)[:120]}")
+        raw_svg = svg.encode("utf-8")
+        img_total += len(raw_svg)
+        if img_total > MAX_TOTAL_IMG:
+            raise HTTPException(
+                400,
+                f"PPT 渲染后矢量/图像超过 {MAX_TOTAL_IMG // (1024 * 1024)}MB 上限，"
+                "请减少页数或拆分文档",
+            )
+        b64 = base64.b64encode(raw_svg).decode("ascii")
+        ratio = hpx / wpx
+        pages.append({
+            "page": {"w": wpx, "h": hpx, "paper": {"style": "plain", "color": "white"}},
+            "images": [{"id": f"ppt{len(pages) + 1}", "x": 0, "y": 0, "w": 1, "r": ratio,
+                        "src": f"data:image/svg+xml;base64,{b64}"}],
+            "strokes": [],
+        })
+    return pages
+
+
 @router.post("/import")
 async def import_ppt(
     request: Request,
@@ -308,30 +350,7 @@ async def import_ppt(
     if not data:
         raise HTTPException(400, "空文件")
 
-    try:
-        from pptx import Presentation
-        prs = Presentation(BytesIO(data))
-    except Exception as e:
-        raise HTTPException(400, f"PPT 解析失败（可能已损坏或含加密）：{str(e)[:120]}")
-
-    if not len(prs.slides._sldIdLst):
-        raise HTTPException(400, "PPT 中没有幻灯片")
-
-    pages = []
-    warned: set[str] = set()
-    for slide in prs.slides:
-        try:
-            svg, wpx, hpx = _slide_svg(prs, slide)
-        except Exception as e:
-            raise HTTPException(500, f"第 {len(pages) + 1} 页转换失败：{str(e)[:120]}")
-        b64 = base64.b64encode(svg.encode("utf-8")).decode("ascii")
-        ratio = hpx / wpx
-        pages.append({
-            "page": {"w": wpx, "h": hpx, "paper": {"style": "plain", "color": "white"}},
-            "images": [{"id": f"ppt{len(pages) + 1}", "x": 0, "y": 0, "w": 1, "r": ratio,
-                        "src": f"data:image/svg+xml;base64,{b64}"}],
-            "strokes": [],
-        })
+    pages = await run_in_threadpool(_render_ppt_to_pages, data)
 
     title = re.sub(r"\.pptx$", "", name, flags=re.I).strip() or "PPT 笔记"
     if len(title) > 100:

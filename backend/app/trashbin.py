@@ -64,14 +64,16 @@ def move_to_trash(items: list[Path], *, module: str, label: str) -> str | None:
         vault.write_json(_manifest_path(tid), manifest)
         return tid
     except Exception:
+        rollback_failed = False
         for src, rel in moved:  # 回滚
             try:
                 target = config.DATA_DIR / rel
                 target.parent.mkdir(parents=True, exist_ok=True)
                 shutil.move(str(src), str(target))
             except OSError:
-                pass
-        shutil.rmtree(dest, ignore_errors=True)
+                rollback_failed = True
+        if not rollback_failed:
+            shutil.rmtree(dest, ignore_errors=True)
         raise
 
 
@@ -85,10 +87,12 @@ def list_items() -> list[dict]:
             continue
         try:
             m = vault.read_json(mp)
-        except Exception:
-            # 损坏/未解锁：未解锁由 vault.dek() 抛 423 冒泡；此处只兜底真正的坏文件，不让列表整体炸
-            out.append({"tid": d.name, "module": "?", "label": "（清单损坏，无法解读）",
-                        "deleted_at": "", "entries": [], "broken": True})
+        except Exception as e:
+            from fastapi import HTTPException
+            if isinstance(e, HTTPException):
+                raise
+            out.append({"tid": d.name, "module": "?", "label": "清单损坏，无法解读",
+                        "deleted_at": "", "items_count": 0})
             continue
         out.append({
             "tid": m.get("tid", d.name), "module": m.get("module", ""),

@@ -18,6 +18,12 @@ from fastapi import HTTPException
 from . import crypto
 
 _dek: bytes | None = None
+_epoch: int = 0
+
+
+def epoch() -> int:
+    """返回当前数据密钥世代号（DEK Epoch），每次 set_dek/clear_dek 自增。"""
+    return _epoch
 
 
 def atomic_write_bytes(path: Path, data: bytes) -> None:
@@ -39,13 +45,15 @@ def atomic_write_bytes(path: Path, data: bytes) -> None:
 
 
 def set_dek(dek: bytes) -> None:
-    global _dek
+    global _dek, _epoch
     _dek = dek
+    _epoch += 1
 
 
 def clear_dek() -> None:
-    global _dek
+    global _dek, _epoch
     _dek = None
+    _epoch += 1
 
 
 def has_dek() -> bool:
