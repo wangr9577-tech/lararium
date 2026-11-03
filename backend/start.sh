@@ -10,12 +10,12 @@ set -euo pipefail
 unset http_proxy https_proxy all_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY || true
 cd "$(dirname "$0")/.."
 
-PY_BIN="${KRUSKAL_PY:-/mnt/data_server/home/stu_wr/miniconda3/envs/site/bin/python}"
+PY_BIN="${KRUSKAL_PY:-python3}"
 HOST="${KRUSKAL_HOST:-127.0.0.1}"
 PORT="${1:-${KRUSKAL_PORT:-18080}}"
 
-if [ ! -x "$PY_BIN" ]; then
-  echo "找不到 Python: $PY_BIN （先 conda create -n site python=3.11）" >&2
+if ! command -v "$PY_BIN" >/dev/null 2>&1 && [ ! -x "$PY_BIN" ]; then
+  echo "找不到 Python: $PY_BIN （先 conda create -n site python=3.11 或配置 KRUSKAL_PY）" >&2
   exit 1
 fi
 

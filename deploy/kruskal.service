@@ -5,16 +5,36 @@ After=network.target
 StartLimitIntervalSec=300
 StartLimitBurst=5
 
+# ---------------------------------------------------------------------------
+# 装法（两种，按服务器权限选一种）：
+#
+# A) 用户级服务 —— 本机实际采用（无 root 也能装，已启用 linger）：
+#      1) 把本文件去掉 User=/WantedBy=multi-user.target，改成 WantedBy=default.target，
+#         放到 ~/.config/systemd/user/kruskal.service（本机已存在这个副本）
+#      2) loginctl enable-linger kruskal     # 完全登出后仍继续跑（无需 root）
+#      3) systemctl --user daemon-reload
+#         systemctl --user enable --now kruskal.service
+#      日常：systemctl --user {status,restart,stop} kruskal.service
+#            journalctl --user -u kruskal.service -f
+#
+# B) 系统级服务 —— 需要 root：
+#      sudo cp deploy/kruskal.service /etc/systemd/system/
+#      sudo systemctl daemon-reload && sudo systemctl enable --now kruskal
+#
+# 注意：ExecStart 不带 --reload。dev 模式的自动重载会在每次改码时清空内存里的
+# 数据密钥(DEK)，生产常驻一律用静态启动；改完后端代码要 systemctl restart。
+# ---------------------------------------------------------------------------
+
 [Service]
 Type=simple
-User=stu_wr
-WorkingDirectory=/mnt/data_server/home/stu_wr/deepseek-workspace/kruskal
+User=kruskal
+WorkingDirectory=/opt/kruskal
 # 监听地址/端口只在这里配置一份，ExecStart 展开引用（P1：消灭硬编码与配置漂移）
 Environment=KRUSKAL_HOST=127.0.0.1
 Environment=KRUSKAL_PORT=18080
 # 服务外呼（翻译/一言）一律直连：显式清掉可能继承来的代理
 Environment=http_proxy= https_proxy= all_proxy= HTTP_PROXY= HTTPS_PROXY= ALL_PROXY=
-ExecStart=/bin/sh -c 'exec /mnt/data_server/home/stu_wr/miniconda3/envs/site/bin/python -m uvicorn app.main:app --app-dir backend --host "${KRUSKAL_HOST}" --port "${KRUSKAL_PORT}"'
+ExecStart=/bin/sh -c 'exec /opt/kruskal/venv/bin/python -m uvicorn app.main:app --app-dir backend --host "${KRUSKAL_HOST}" --port "${KRUSKAL_PORT}"'
 Restart=on-failure
 RestartSec=3
 

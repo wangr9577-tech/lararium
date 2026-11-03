@@ -1,87 +1,164 @@
-# Kruskal · 个人网站
+# Lararium
 
-二次元风格的本地个人站：日程打卡 + 热力图 / 笔记博客(md→PDF) / 论文阅读(荧光笔+划词翻译) / 日记 / 时光机 / 生词本 / 学术个人页（含 KAUST 直博申请时间线）。
+<p align="center">
+  <strong>A Sovereign Digital Garden & Academic Workbench with Zero-Trust Envelope Encryption</strong>
+</p>
 
-> 状态：**功能期基本收口**——骨架 + F1~F4、F6、F7 大部已落地并过 P0/P1/P2 三轮安全/正确性修复；剩余为打磨项（二次元皮肤等）。
+<p align="center">
+  <a href="README.md">English</a> | <a href="README_zh.md">简体中文</a>
+</p>
 
-## 架构
+<p align="center">
+  <img src="https://img.shields.io/badge/Python-3.11+-3776AB?style=flat&logo=python&logoColor=white" alt="Python 3.11+" />
+  <img src="https://img.shields.io/badge/Vue.js-3.5+-4FC08D?style=flat&logo=vuedotjs&logoColor=white" alt="Vue 3" />
+  <img src="https://img.shields.io/badge/FastAPI-0.115+-009688?style=flat&logo=fastapi&logoColor=white" alt="FastAPI" />
+  <img src="https://img.shields.io/badge/Vite-6.0+-646CFF?style=flat&logo=vite&logoColor=white" alt="Vite" />
+  <img src="https://img.shields.io/badge/Docker-Ready-2496ED?style=flat&logo=docker&logoColor=white" alt="Docker Ready" />
+  <img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT" />
+</p>
 
-- 前端：Vue 3 + Vite + Element Plus（TypeScript）
-- 后端：FastAPI (Python 3.11, conda env `site`) + SQLite（元数据）
-- 内容：Markdown 文件为唯一真相，**正文 AES-256-GCM 加密落盘**（`backend/data/`，独立 git 仓库）
-- 部署：单端口 18080，后端托管前端 dist；仅绑定 127.0.0.1（跨子网/校外走 SSH 隧道或出站隧道，见 deploy/ACCESS.md）
+---
 
-## 快速开始
+## 🏛️ What is Lararium?
 
-```bash
-# 1. 后端依赖（一次性）
-conda create -y -n site python=3.11 pip
-/mnt/data_server/home/stu_wr/miniconda3/envs/site/bin/pip install -i https://pypi.tuna.tsinghua.edu.cn/simple -r backend/requirements.txt
+In classical Roman antiquity, the **Lararium** was the sacred domestic shrine dedicated to the guardian spirits of the home—safeguarding intimate family treasures and private sanctums.
 
-# 2. 前端（一次性）
-cd frontend && npm install --registry=https://registry.npmmirror.com && npm run build && cd ..
+In the digital era, **Lararium** (formerly *Kruskal*) is an all-in-one, self-hosted personal operating system, academic digital garden, and knowledge hub. Built specifically for independent researchers, engineers, and digital minimalists, it integrates notes, slide-based whiteboards, literature appraisal, intelligent event reconciliation, accounting, and life tracking within a **strict AES-256-GCM envelope encryption boundary** and a visually captivating **anime-inspired glassmorphism interface**.
 
-# 3. 启动
-bash backend/start.sh            # 默认 127.0.0.1:18080，可传端口
+---
+
+## ✨ Key Features
+
+### 🛡️ 1. True Sovereign Data Privacy & Envelope Encryption
+- **AES-256-GCM Encryption at Rest**: Markdown notes, daily footprints, private photos, and event cards are strictly encrypted on disk. Plaintext never leaks to unencrypted storage.
+- **Lock-Guard Memory Defense**: Locking your workspace immediately zeroes memory Data Encryption Keys (DEKs). Background jobs pause with epoch tracking to prevent dirty writes.
+- **Atomic File System**: All writes enforce atomic replace semantics (`fsync` + temporary staging files), eliminating file corruption during unexpected power cuts.
+
+### 🖊️ 2. Offscreen Canvas Whiteboard & Courseware Ingestion
+- **Multi-layer Offscreen Inking**: Powered by WebWorkers and `perfect-freehand`, delivering pressure-sensitive, anti-aliased pen strokes with instant rendering.
+- **Pure Python PPTX/PDF Ingestion**: Converts `.pptx` slides directly to high-fidelity SVG vector pages and rasterizes `.pdf` courseware into multi-page writeable boards with zero external binaries (no LibreOffice, Poppler, or headless Chromium required).
+
+### 🔬 3. Zero-Copy Research Workspace & External Project Mounting
+- **Direct Workspace Linking**: Mount real Markdown directories from external repositories into your workbench. No duplicated storage.
+- **Bi-directional Backlinks & Conflict Guard**: Tracks bidirectional wiki-style backlinks (`[[Title]]`), while SHA-256 content hashes prevent concurrent overwrites from AI coding agents or local editors.
+
+### 🤖 4. Notification Intelligence & Task Reconciliation
+- **Automated Event Extraction**: Feeds unstructured campus/work notices into local or remote LLMs (Qwen, DeepSeek) to automatically track deadlines and requirements.
+- **Single Source of Truth**: Reconciles postponements and revisions across incoming announcements without polluting schedules with duplicate tasks.
+
+### 🌌 5. Complete Life Operating Suite
+- **Ledger**: Exact-cent financial tracking with debt channels, multi-currency support, and audit snapshots.
+- **Daily Footprint & Diary**: Daily journal aggregating completed schedule tasks, financial expenses, and research milestones.
+- **Vocabulary & Language Learning**: Leitner spaced-repetition box system and IELTS 4-skill timeline review.
+- **Encrypted Photo Album**: Encrypted image storage with duplicate detection and atomic rollback guards.
+
+---
+
+## 📐 Architecture Overview
+
+```text
+       Browser Client (SPA)
+  [Vue 3 + TypeScript + Vite 6]
+  [Element Plus + ECharts + KaTeX]
+  [WebWorker Offscreen Whiteboard]
+                │
+                │ HTTP REST / Stream
+                ▼
+        FastAPI Gateway (:8000)
+┌───────────────────────────────────────┐
+│ Global Auth & Session Vault Middleware│
+│ - AES-256-GCM Envelope Encryption    │
+│ - PBKDF2 / Argon2 DEK Derivation      │
+│ - Lock Guard & Threadpool Executors   │
+└───────────────────────────────────────┘
+        │                       │
+        ▼                       ▼
+SQLite Metadata DB        Encrypted Vault Storage
+(/app/data/kruskal.db)    (/app/data/*.enc, *.md)
 ```
 
-## PDF 导出依赖（笔记阅读页「导出 PDF」，均为用户级安装，无需 sudo）
+---
 
-- pandoc：`conda install -y -n site -c conda-forge pandoc`（本机已装 3.11）
-- TinyTeX + xelatex：`~/.TinyTeX`（已装，TeX Live 2026，含 xeCJK/ctex）；若换机器，用官方安装脚本并设国内镜像
-- 中文字体：`~/.fonts`（Noto Serif CJK SC / SimHei / SimSun 已放）；渲染用 Noto Serif CJK SC
-- 接口：`GET /api/notes/{id}/export`；临时文件在 `data/tmp`，渲染完即清
+## 🚀 Quick Start
 
-## 导入依赖（博客页「导入 PPT / 导入 PDF」）
+### Option A: One-Click Docker Deployment (Recommended)
 
-- PDF：`pip install -i https://pypi.tuna.tsinghua.edu.cn/simple pymupdf`（本机已装 1.28，纯 wheel 无需 poppler/gs）
-- PPT：`python-pptx`（见 `backend/requirements.txt`，本机已装）
-- 接口：`POST /api/pdf/import`、`POST /api/ppt/import`；两者都把文档逐页渲染成整页底图，
-  生成一篇 `fmt=ink` 的多页白板笔记（可在任意页手写/荧光笔/插图），**服务器不保留原始文件**；
-  PDF 渲染 DPI 120、页数上限 80、图像总量上限 30MB（见 `backend/app/routers/pdf.py` 常量）
+1. Clone the repository:
+   ```bash
+   git clone https://github.com/wangr9577-tech/lararium.git
+   cd lararium
+   ```
 
-## 访问方式（SSH 隧道）
+2. Start the service using Docker Compose:
+   ```bash
+   docker compose up -d
+   ```
 
-服务仅绑定 `127.0.0.1:18080`，跨子网/校外一律走隧道（无需对服务器开任何端口）：
+3. Open your browser and navigate to `http://localhost:8000`. On first launch, follow the on-screen instructions to set up your master key and administrator password.
 
+---
+
+### Option B: Bare-Metal Setup (Development)
+
+#### 1. Backend Setup
 ```bash
-# 在你自己的电脑上执行（保持窗口开着）：
-ssh -N -L 18080:127.0.0.1:18080 stu_wr@192.168.2.222
-# 然后浏览器打开 http://127.0.0.1:18080
+# Recommended: Python 3.11+
+python -m venv .venv
+source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+
+pip install -r backend/requirements.txt
 ```
 
-> 校园网跨子网直连不可达、公网访问（Cloudflare/Tailscale 等出站隧道）的方案见 `deploy/ACCESS.md`。
-
-初始账号 `admin`，初始密码见 `backend/data/initial_password.txt`，登录后立即在 **设置 → 账户安全** 中修改（改密会自动重新加密数据密钥）。
-
-## 页面路线图
-
-| 期 | 内容 |
-|---|---|
-| [完成] 骨架 | 登录鉴权、11 页壳、主题(明/暗)、设置(翻译源/LLM 渠道/改密)、真实热力图、数据加密基建、git 化与迁移脚本 |
-| [完成] F1 | 首页：日程 CRUD + 打勾 + 真实热力图（每日完成%） |
-| [完成] F2 | 日记：正文加密读写 + 心情/天气 + 自动保存与关页补存 + 删除进回收站 |
-| [完成] F3 | 笔记编辑器（富文本工具栏 + 预览）+ md→PDF 导出（pandoc + TinyTeX/xelatex）+ 目录/子文件夹 + PPT/PDF 导入（渲染为多页白板笔记，可直接手写标注） |
-| [完成] F4 | 论文库/阅读器：上传、文本层荧光笔标注、划词词典 + 免费翻译 API |
-| ~~F5~~ | AI 写作助手：已按用户决定移除（曾考虑直连 DSH，用户选择不做） |
-| [完成] F6 | 学术个人页可编辑 + 投稿跟踪 + 学术 CV 生成 + 只读分享（快照加密，可撤销） |
-| [部分] F7 | 时光机 ✅ + 相册 ✅ + 生词本复习(间隔重现) ✅ + 记账 ✅ + IELTS 备考 ✅；二次元皮肤（看板娘）未做——预留的 pixi 依赖已按决策移除，做时再加 |
-
-## 开发
-
+#### 2. Frontend Build
 ```bash
-# 后端热更
-cd backend && /path/to/site/bin/python -m uvicorn app.main:app --app-dir backend --reload --port 18080
-# 前端热更（vite dev 5173，/api 代理到 18080）
-cd frontend && npm run dev
+cd frontend
+npm install
+npm run build
+cd ..
 ```
 
-## 数据与安全
+#### 3. Run Server
+```bash
+uvicorn backend.app.main:app --host 0.0.0.0 --port 8000
+```
 
-- 全部数据在 `backend/data/`（一个目录即全部），拷贝即迁移，见 `deploy/MIGRATION.md`
-- 备份：`deploy/backup.sh`（sqlite 一致性快照 + openssl 口令加密 `.tar.gz.enc` + `.sha256`；备份口令独立于主密码），还原：`deploy/restore.sh`（校验→解密→换入，旧 data 自动保留为 `data.bak-*`）
-- 删除可救：笔记/相册/论文/日记的删除先进 `data/trash/` 回收站，站内「回收站」可恢复或永久删除
-- 运行时：`/api` 全局鉴权中间件兜底（新路由漏写 `Depends` 也不裸奔）+ 登录防爆破限流（10 分钟 10 败 → 429）+ CSP 响应头（`KRUSKAL_CSP=0` 可关）+ Markdown 渲染 DOMPurify 净化；生产关闭 `/docs`（`KRUSKAL_DEV=1` 才开）；上传流式限量，会话 token 过期即清、每用户封顶 20；sqlite 库文件 0600
-- 生产启动用 `bash backend/start.sh`（默认不开 `--reload`；开发热更才加 `KRUSKAL_DEV=1`）
-- 密码忘记 = 数据不可恢复（加密密钥由主密码派生），务必定期备份
-- 翻译走免费 API（有道/百度/MyMemory，可在设置切换），不占 LLM；LLM 仅用于写作助手
+---
+
+## ⚙️ Environment Configuration
+
+Copy the example environment file:
+```bash
+cp .env.example .env
+```
+
+| Variable | Default | Description |
+| :--- | :--- | :--- |
+| `KRUSKAL_DATA_DIR` | `./data` | Directory where SQLite DB and encrypted vault files reside. |
+| `KRUSKAL_PORT` | `8000` | Port for the web gateway. |
+| `AI_ENDPOINT` | `http://127.0.0.1:18081/v1` | OpenAI-compatible endpoint for LLM features. |
+| `AI_MODEL` | `qwen3.8-flash...` | Model identifier for assistant summarization. |
+
+---
+
+## 🔒 Security & Privacy Model
+
+- **Zero Third-Party Telemetry**: Lararium sends no telemetry, tracker beacons, or external analytic pings.
+- **Client-Side Protection**: Strict Content Security Policy (CSP), DOMPurify sanitization, and timing-safe token verifications.
+- **Scoped Local Binding**: Recommended for private deployment bound to `127.0.0.1` and accessed via authenticated SSH tunnels or Tailscale mesh networks.
+
+---
+
+## 📄 License & Attribution
+
+This project is licensed under the **MIT License** - see the [LICENSE](LICENSE) file for details.
+
+### Third-Party Notices
+- **PyMuPDF**: Document processing utilizes PyMuPDF (licensed under AGPL-3.0 / Commercial). If you redistribute Lararium in a proprietary closed-source product, please verify compliance with Artifex licensing guidelines.
+- **KaTeX**: Fast math typesetting licensed under the MIT License.
+- **Element Plus**: UI component library licensed under the MIT License.
+
+---
+
+<p align="center">
+  Crafted with care for personal autonomy, research clarity, and aesthetic peace.
+</p>

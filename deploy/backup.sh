@@ -16,8 +16,8 @@ mkdir -p "$OUT"
 STAMP="$(date +%Y%m%d-%H%M%S)"
 ENC="$OUT/kruskal-data-$STAMP.tar.gz.enc"
 
-PY_BIN="${KRUSKAL_PY:-/mnt/data_server/home/stu_wr/miniconda3/envs/site/bin/python}"
-[ -x "$PY_BIN" ] || PY_BIN=python3
+PY_BIN="${KRUSKAL_PY:-python3}"
+[ -x "$PY_BIN" ] || PY_BIN="$(command -v python3 || command -v python || echo python3)"
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
@@ -67,4 +67,4 @@ chmod 600 "$ENC"
 ( cd "$OUT" && sha256sum "$(basename "$ENC")" > "$(basename "$ENC").sha256" )
 
 echo "备份完成: $ENC（含 .sha256 校验文件，请一并保存）"
-echo "提示: 建议把 .enc 与 .sha256 一起 rsync 到 NAS 其他目录（如 /mnt/data_server 的另一位置）。"
+echo "提示: 建议把 .enc 与 .sha256 一起 rsync 到 NAS 或异地存储的另一安全位置。"
