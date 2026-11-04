@@ -29,9 +29,10 @@ In the digital era, **Lararium** (formerly *Kruskal*) is a self-hosted personal 
 
 ## ✨ Key Features
 
-### 🛡️ 1. True Sovereign Data Privacy & Envelope Encryption
+### 🛡️ 1. Encrypted Storage & Passwordless Local Access
 - **AES-256-GCM Encryption at Rest**: Notes and other private content use encrypted storage.
 - **Local passwordless access**: Windows launchers unlock data with a local key and create a local browser session automatically. Password-based deployments retain the lock feature.
+- **Local key protection**: The local key is stored alongside the data, so anyone who can access both can decrypt the content. Protect the data directory and backups.
 - **Atomic File System**: All writes enforce atomic replace semantics (`fsync` + temporary staging files), eliminating file corruption during unexpected power cuts.
 
 ### 🖊️ 2. Offscreen Canvas Whiteboard & Courseware Ingestion
