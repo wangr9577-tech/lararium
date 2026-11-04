@@ -321,7 +321,7 @@
     </section>
 
     <!-- 账户 -->
-    <section class="glass card">
+    <section v-if="!isLocalMode" class="glass card">
       <div class="card-title"><el-icon><Key /></el-icon> 账户安全</div>
       <el-form label-position="top" class="pw-form" @submit.prevent>
         <div class="form-grid">
@@ -400,6 +400,7 @@ const DEFAULT_AI_PROFILES: AiProfile[] = [
 ]
 
 const router = useRouter()
+const isLocalMode = sessionStorage.getItem('krs_local_mode') === '1'
 const themeMode = ref(localStorage.getItem('krs_theme') || 'dark')
 const siteName = ref('Kruskal')
 const siteSlogan = ref('')

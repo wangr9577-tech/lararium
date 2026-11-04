@@ -1,7 +1,7 @@
 # Lararium
 
 <p align="center">
-  <strong>A Sovereign Digital Garden & Academic Workbench with Zero-Trust Envelope Encryption</strong>
+  <strong>A Personal Digital Garden & Academic Workbench</strong>
 </p>
 
 <p align="center">
@@ -23,15 +23,15 @@
 
 In classical Roman antiquity, the **Lararium** was the sacred domestic shrine dedicated to the guardian spirits of the home—safeguarding intimate family treasures and private sanctums.
 
-In the digital era, **Lararium** (formerly *Kruskal*) is an all-in-one, self-hosted personal operating system, academic digital garden, and knowledge hub. Built specifically for independent researchers, engineers, and digital minimalists, it integrates notes, slide-based whiteboards, literature appraisal, intelligent event reconciliation, accounting, and life tracking within a **strict AES-256-GCM envelope encryption boundary** and a visually captivating **anime-inspired glassmorphism interface**.
+In the digital era, **Lararium** (formerly *Kruskal*) is a self-hosted personal workspace for notes, whiteboards, research, schedules, and daily life. Content is encrypted at rest; the Windows local setup uses passwordless access with a locally stored key.
 
 ---
 
 ## ✨ Key Features
 
 ### 🛡️ 1. True Sovereign Data Privacy & Envelope Encryption
-- **AES-256-GCM Encryption at Rest**: Markdown notes, daily footprints, private photos, and event cards are strictly encrypted on disk. Plaintext never leaks to unencrypted storage.
-- **Lock-Guard Memory Defense**: Locking your workspace immediately zeroes memory Data Encryption Keys (DEKs). Background jobs pause with epoch tracking to prevent dirty writes.
+- **AES-256-GCM Encryption at Rest**: Notes and other private content use encrypted storage.
+- **Local passwordless access**: Windows launchers unlock data with a local key and create a local browser session automatically. Password-based deployments retain the lock feature.
 - **Atomic File System**: All writes enforce atomic replace semantics (`fsync` + temporary staging files), eliminating file corruption during unexpected power cuts.
 
 ### 🖊️ 2. Offscreen Canvas Whiteboard & Courseware Ingestion
@@ -64,24 +64,28 @@ In the digital era, **Lararium** (formerly *Kruskal*) is an all-in-one, self-hos
                 │
                 │ HTTP REST / Stream
                 ▼
-        FastAPI Gateway (:8000)
+        FastAPI Gateway (:18080 locally)
 ┌───────────────────────────────────────┐
 │ Global Auth & Session Vault Middleware│
 │ - AES-256-GCM Envelope Encryption    │
-│ - PBKDF2 / Argon2 DEK Derivation      │
+│ - Password or local key management    │
 │ - Lock Guard & Threadpool Executors   │
 └───────────────────────────────────────┘
         │                       │
         ▼                       ▼
 SQLite Metadata DB        Encrypted Vault Storage
-(/app/data/kruskal.db)    (/app/data/*.enc, *.md)
+(data/site.db)            (data/notes/, etc.)
 ```
 
 ---
 
 ## 🚀 Quick Start
 
-### Option A: One-Click Docker Deployment (Recommended)
+### Windows local setup (passwordless)
+
+Run `start.bat` or launch `start_silent.vbs` in the background, then open <http://127.0.0.1:18080/>. These launchers set `KRUSKAL_LOCAL_NO_PASSWORD=1`; no username or password is required. Existing password-protected data needs an explicit key migration before using this mode.
+
+### Docker deployment (password authentication)
 
 1. Clone the repository:
    ```bash
@@ -94,7 +98,7 @@ SQLite Metadata DB        Encrypted Vault Storage
    docker compose up -d
    ```
 
-3. Open your browser and navigate to `http://localhost:8000`. On first launch, follow the on-screen instructions to set up your master key and administrator password.
+3. Open `http://127.0.0.1:8000`. The server deployment uses password authentication by default; its initial credentials are written to `initial_password.txt` in the configured data directory.
 
 ---
 
@@ -119,7 +123,7 @@ cd ..
 
 #### 3. Run Server
 ```bash
-uvicorn backend.app.main:app --host 0.0.0.0 --port 8000
+uvicorn app.main:app --app-dir backend --host 127.0.0.1 --port 18080
 ```
 
 ---
@@ -133,8 +137,9 @@ cp .env.example .env
 
 | Variable | Default | Description |
 | :--- | :--- | :--- |
-| `KRUSKAL_DATA_DIR` | `./data` | Directory where SQLite DB and encrypted vault files reside. |
-| `KRUSKAL_PORT` | `8000` | Port for the web gateway. |
+| `KRUSKAL_DATA_DIR` | `backend/data` | Directory where SQLite DB and encrypted vault files reside. |
+| `KRUSKAL_LOCAL_NO_PASSWORD` | unset | `1` enables the Windows launchers' local passwordless mode; use only with a prepared local data directory. |
+| `KRUSKAL_PORT` | `18080` | Default port for the local web gateway. |
 | `AI_ENDPOINT` | `http://127.0.0.1:11434/v1` | OpenAI-compatible endpoint for LLM features (e.g. Ollama, vLLM). |
 | `AI_MODEL` | `qwen2.5:7b` | Model identifier for assistant summarization. |
 
@@ -145,6 +150,8 @@ cp .env.example .env
 - **Zero Third-Party Telemetry**: Lararium sends no telemetry, tracker beacons, or external analytic pings.
 - **Client-Side Protection**: Strict Content Security Policy (CSP), DOMPurify sanitization, and timing-safe token verifications.
 - **Scoped Local Binding**: Recommended for private deployment bound to `127.0.0.1` and accessed via authenticated SSH tunnels or Tailscale mesh networks.
+- **Passwordless local keys**: In local mode, `.autokey` and `.kek.auto` are stored together in the data directory. Anyone able to read both files and the encrypted data can decrypt it. Keep both files in backups; losing them can make the data unreadable. This local mode is not intended for network exposure.
+- **Independent deployments**: A server instance retains its own authentication and data. Local and server copies do not sync automatically.
 
 ---
 

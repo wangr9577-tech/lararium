@@ -1,5 +1,5 @@
 import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router'
-import { getToken } from '../api/client'
+import { getToken, setToken, USER_KEY } from '../api/client'
 import { site } from '../stores/site'
 
 export interface NavItem {
@@ -94,7 +94,18 @@ const router = createRouter({
   routes,
 })
 
-router.beforeEach((to) => {
+router.beforeEach(async (to) => {
+  if (!getToken()) {
+    try {
+      const response = await fetch('/api/auth/local-session', { method: 'POST' })
+      if (response.ok) {
+        const data = await response.json()
+        setToken(data.token)
+        localStorage.setItem(USER_KEY, data.username)
+        sessionStorage.setItem('krs_local_mode', '1')
+      }
+    } catch { /* Normal password login remains available. */ }
+  }
   const hasToken = !!getToken()
   if (!to.meta.public && !hasToken) return { path: '/login' }
   if (to.path === '/login' && hasToken) return { path: '/' }

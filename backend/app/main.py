@@ -16,6 +16,7 @@ from . import config
 from .auth import bootstrap_admin
 from .db import init_db
 from . import autokey  # 免密自动解锁（可选，默认关闭，见 app/autokey.py）
+from . import crypto, vault
 from .routers import auth as auth_router
 from .routers import album as album_router
 from .routers import anniversary as anniversary_router
@@ -53,6 +54,18 @@ init_db()
 bootstrap_admin()
 authz.sweep_expired()  # 启动清一轮历史过期会话（P1 token 治理）
 
+if config.LOCAL_NO_PASSWORD:
+    # Local mode is deliberately initialized only for an empty data directory.
+    # Never replace a missing key for an existing password-protected vault.
+    config.AUTOKEY_KEY = config.DATA_DIR / ".autokey"
+    if not autokey.enabled():
+        if config.KEYWRAP_PATH.exists() or config.AUTOKEY_WRAP.exists():
+            raise RuntimeError("Local key unavailable; refusing to replace existing vault key")
+        autokey.enable(crypto.new_dek())
+    if not autokey.try_unlock():
+        raise RuntimeError("Cannot unlock local data key")
+    config.INIT_PW_FILE.unlink(missing_ok=True)
+
 # 免密自动解锁（可选）：解开就不必再人工输主密码；任何失败都只当没开启，绝不阻断启动
 if autokey.try_unlock():
     logging.getLogger("kruskal").info(
@@ -79,7 +92,7 @@ app = FastAPI(
 
 # ---- 全局安全网（P1-G2）：/api 一律要求有效 Bearer，白名单除外 ----
 # 路由内的 Depends(get_current) 保留不动：中间件兜住"新路由忘写鉴权"的结构性风险。
-_PUBLIC_API = ("/api/auth/login", "/api/site")  # 2026-09 审计：94 端点仅这两个公开（/share 页不在 /api 下）
+_PUBLIC_API = ("/api/auth/login", "/api/auth/local-session", "/api/site")
 _CSP_ON = os.environ.get("KRUSKAL_CSP", "1") != "0"
 _CSP = ("default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; "
         "img-src 'self' data: blob:; font-src 'self' data:; worker-src 'self' blob:; "

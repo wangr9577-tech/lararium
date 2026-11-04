@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import time
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -55,6 +56,24 @@ class PasswordIn(BaseModel):
 
 class AutoUnlockIn(BaseModel):
     password: str = Field(min_length=1, max_length=256)
+
+
+@router.post("/local-session")
+def local_session(request: Request):
+    if not config.LOCAL_NO_PASSWORD:
+        raise HTTPException(status_code=404, detail="Not found")
+    host = request.headers.get("host", "").lower()
+    origin = request.headers.get("origin", "")
+    parsed = urlsplit(origin)
+    if (request.client is None or request.client.host not in ("127.0.0.1", "::1")
+            or host not in ("127.0.0.1:18080", "localhost:18080")
+            or parsed.scheme != "http" or parsed.netloc.lower() != host):
+        raise HTTPException(status_code=403, detail="Local access only")
+    if not vault.has_dek():
+        raise HTTPException(status_code=503, detail="Local data key unavailable")
+    with db() as conn:
+        row = conn.execute("SELECT id, username FROM users ORDER BY id LIMIT 1").fetchone()
+    return {"token": authz.issue_token(row["id"]), "username": row["username"]}
 
 
 @router.post("/login")
@@ -132,6 +151,8 @@ def lock(user: dict = Depends(authz.get_current)):
     顺带撤销 `.kek.auto` 是必须的：否则「上锁」之后进程一重启又自动解锁，
     上锁按钮就成了摆设。想恢复免密在 设置 → 账户安全 里重新打开即可（要输一次密码）。
     """
+    if config.LOCAL_NO_PASSWORD:
+        raise HTTPException(status_code=400, detail="本机免密码模式不支持上锁")
     authz.revoke_all_for(user["id"])
     vault.clear_dek()
     removed = autokey.disable()
@@ -173,6 +194,8 @@ def auto_unlock_enable(body: AutoUnlockIn, user: dict = Depends(authz.get_curren
 @router.delete("/auto-unlock")
 def auto_unlock_disable(user: dict = Depends(authz.get_current)):
     """关闭免密：删掉包裹与本机密钥，之后重启回到必须输入主密码。"""
+    if config.LOCAL_NO_PASSWORD:
+        raise HTTPException(status_code=400, detail="本机免密码模式不能关闭本机密钥")
     removed = autokey.disable()
     return {"ok": True, "removed": removed, **_auto_status()}
 
@@ -180,6 +203,8 @@ def auto_unlock_disable(user: dict = Depends(authz.get_current)):
 @router.put("/password")
 def change_password(body: PasswordIn, user: dict = Depends(authz.get_current)):
     import os
+    if config.LOCAL_NO_PASSWORD:
+        raise HTTPException(status_code=400, detail="本机免密码模式不支持修改密码")
     with db() as conn:
         row = conn.execute("SELECT * FROM users WHERE id=?", (user["id"],)).fetchone()
     if row is None or not authz.verify_password(body.old_password, row["salt"], row["pw_hash"]):

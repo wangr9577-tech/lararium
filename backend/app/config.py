@@ -11,6 +11,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 # 数据目录：所有用户内容（笔记/日记/论文/相册/说说/密钥包裹）都在这里
 DATA_DIR = Path(os.environ.get("KRUSKAL_DATA_DIR", str(REPO_ROOT / "backend" / "data")))
+LOCAL_NO_PASSWORD = os.environ.get("KRUSKAL_LOCAL_NO_PASSWORD") == "1"
 
 # 仅绑定本机回环：跨子网/校外访问一律走 SSH 隧道或出站隧道（详见 deploy/ACCESS.md）
 # 如需临时放开，用环境变量 KRUSKAL_HOST=0.0.0.0 覆盖

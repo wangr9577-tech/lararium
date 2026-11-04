@@ -35,12 +35,12 @@
             <div class="uname">{{ username }}</div>
             <div class="utag">个人空间</div>
           </div>
-          <el-tooltip content="上锁网页" placement="top">
+          <el-tooltip v-if="!isLocalMode" content="上锁网页" placement="top">
             <el-button text circle @click="lock">
               <el-icon :size="18"><Lock /></el-icon>
             </el-button>
           </el-tooltip>
-          <el-tooltip content="退出登录" placement="top">
+          <el-tooltip v-if="!isLocalMode" content="退出登录" placement="top">
             <el-button text circle @click="logout"><el-icon><SwitchButton /></el-icon></el-button>
           </el-tooltip>
         </div>
@@ -123,6 +123,7 @@ const iconMap: Record<string, IconComponent> = {
 }
 
 const route = useRoute()
+const isLocalMode = sessionStorage.getItem('krs_local_mode') === '1'
 const router = useRouter()
 const drawerOpen = ref(false)
 const narrow = ref(false) // ≤820px：抽屉模式
