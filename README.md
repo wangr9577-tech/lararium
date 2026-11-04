@@ -23,35 +23,31 @@
 
 In classical Roman antiquity, the **Lararium** was the sacred domestic shrine dedicated to the guardian spirits of the home—safeguarding intimate family treasures and private sanctums.
 
-In the digital era, **Lararium** (formerly *Kruskal*) is a self-hosted personal workspace for notes, whiteboards, research, schedules, and daily life. Content is encrypted at rest; the Windows local setup uses passwordless access with a locally stored key.
+**Lararium** (formerly *Kruskal*) brings notes, whiteboards, paper reading, schedules, and everyday records together in a personal workspace.
 
 ---
 
 ## ✨ Key Features
 
-### 🛡️ 1. Encrypted Storage & Passwordless Local Access
-- **AES-256-GCM Encryption at Rest**: Notes and other private content use encrypted storage.
-- **Local passwordless access**: Windows launchers unlock data with a local key and create a local browser session automatically. Password-based deployments retain the lock feature.
-- **Local key protection**: The local key is stored alongside the data, so anyone who can access both can decrypt the content. Protect the data directory and backups.
-- **Atomic File System**: All writes enforce atomic replace semantics (`fsync` + temporary staging files), eliminating file corruption during unexpected power cuts.
+### 🖊️ Write on a whiteboard
 
-### 🖊️ 2. Offscreen Canvas Whiteboard & Courseware Ingestion
-- **Multi-layer Offscreen Inking**: Powered by WebWorkers and `perfect-freehand`, delivering pressure-sensitive, anti-aliased pen strokes with instant rendering.
-- **Pure Python PPTX/PDF Ingestion**: Converts `.pptx` slides directly to high-fidelity SVG vector pages and rasterizes `.pdf` courseware into multi-page writeable boards with zero external binaries (no LibreOffice, Poppler, or headless Chromium required).
+Turn PDF handouts and PPTX slides into multi-page notes and write directly on them. Use a pen, highlighter, eraser, and images; undo edits or add extra space beside a page for your own notes.
 
-### 🔬 3. Zero-Copy Research Workspace & External Project Mounting
-- **Direct Workspace Linking**: Mount real Markdown directories from external repositories into your workbench. No duplicated storage.
-- **Bi-directional Backlinks & Conflict Guard**: Tracks bidirectional wiki-style backlinks (`[[Title]]`), while SHA-256 content hashes prevent concurrent overwrites from AI coding agents or local editors.
+### 📚 Organize notes and read papers
 
-### 🤖 4. Notification Intelligence & Task Reconciliation
-- **Automated Event Extraction**: Feeds unstructured campus/work notices into local or remote LLMs (Qwen, DeepSeek) to automatically track deadlines and requirements.
-- **Single Source of Truth**: Reconciles postponements and revisions across incoming announcements without polluting schedules with duplicate tasks.
+Write Markdown notes with formulas and tables, organize them into folders, search across your collection, and export notes to PDF. Read papers with highlighting and word lookup or translation, and import metadata from an arXiv ID.
 
-### 🌌 5. Complete Life Operating Suite
-- **Ledger**: Exact-cent financial tracking with debt channels, multi-currency support, and audit snapshots.
-- **Daily Footprint & Diary**: Daily journal aggregating completed schedule tasks, financial expenses, and research milestones.
-- **Vocabulary & Language Learning**: Leitner spaced-repetition box system and IELTS 4-skill timeline review.
-- **Encrypted Photo Album**: Encrypted image storage with duplicate detection and atomic rollback guards.
+### 🤖 Keep track of information with the assistant
+
+Collect notices and materials, search and organize cards, and follow deadlines from related updates. Open the calendar or start a note from an item, and ask questions about collected information. AI features require a configured model service.
+
+### 📅 Plan and record your days
+
+Use the calendar for events and deadlines, check off tasks, and see activity on a heatmap. Keep a diary, manage a ledger, save photos and memories, and review vocabulary or IELTS study materials.
+
+### 📂 Read and edit project documents
+
+Open Markdown files from project directories in the same interface. Browse, search, read formulas and images, and edit the original files; a conflict prompt helps when a file has changed elsewhere.
 
 ---
 
@@ -82,7 +78,7 @@ SQLite Metadata DB        Encrypted Vault Storage
 
 ## 🚀 Quick Start
 
-### Windows local setup (passwordless)
+### Windows local setup
 
 Run `start.bat` or launch `start_silent.vbs` in the background, then open <http://127.0.0.1:18080/>. These launchers set `KRUSKAL_LOCAL_NO_PASSWORD=1`; no username or password is required. Existing password-protected data needs an explicit key migration before using this mode.
 
@@ -90,8 +86,8 @@ Run `start.bat` or launch `start_silent.vbs` in the background, then open <http:
 
 1. Clone the repository:
    ```bash
-   git clone https://github.com/your-username/kruskal.git
-   cd kruskal
+   git clone https://github.com/wangr9577-tech/lararium.git
+   cd lararium
    ```
 
 2. Start the service using Docker Compose:
