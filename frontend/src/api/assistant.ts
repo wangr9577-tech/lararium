@@ -34,6 +34,26 @@ export interface AssistantThreadSource {
   raw_content?: string
 }
 
+export interface AssistantTask {
+  id: string
+  title: string
+  deadline_date: string
+  deadline_time: string
+  kind: 'deadline' | 'event'
+  quote: string
+  source_record_ids: number[]
+  done: boolean
+  date_conflict?: boolean
+}
+
+export interface AssistantSourceMessage {
+  record_id: number
+  title: string
+  summary: string
+  evidence_quotes: string[]
+  needs_summary: boolean
+}
+
 export interface AssistantThread {
   id: number
   title: string
@@ -49,6 +69,12 @@ export interface AssistantThread {
   updated_at: string
   sources?: AssistantThreadSource[]
   source_count?: number
+  source_titles?: string[]
+  source_messages?: AssistantSourceMessage[]
+  source_deadlines?: { record_id: number; title: string; date: string; time: string }[]
+  tasks?: AssistantTask[]
+  last_manual_merge_id?: number | null
+  suggestions?: { id: number; title: string; reason: string }[]
 }
 
 export interface LlmDiagnostics {
@@ -94,6 +120,7 @@ export interface AssistantRecord {
   deadline_date?: string
   deadline_time?: string
   highlights?: string[]
+  tasks?: AssistantTask[]
   latest_change?: string
   has_conflict?: boolean
   thread?: AssistantThread
@@ -356,9 +383,104 @@ export const assistantApi = {
     await http.post(`/assistant/records/${id}/retry`)
   },
 
-  /** 改用规则降级整理 */
-  async fallbackRule(id: number): Promise<void> {
-    await http.post(`/assistant/records/${id}/fallback-rule`)
+  /** 真实有据问答对话调用（非流式，保留给兼容场景） */
+  async chat(message: string, contextRecordId?: number): Promise<string> {
+    const res = await http.post<{ answer?: string; sources_used?: number }>('/assistant/chat', {
+      query: message,
+      record_id: contextRecordId,
+    })
+    if (res && res.answer) {
+      return res.answer
+    }
+    return '未获取到回答，请检查后台助手状态或稍后重试。'
+  },
+
+  /**
+   * 有据问答的流式调用：解析后端 SSE（meta / delta / done / error），
+   * 带真实超时控制（默认 120s），失败时抛错由调用方展示。
+   */
+  async chatStream(
+    message: string,
+    contextRecordId: number | undefined,
+    handlers: {
+      onDelta?: (text: string) => void
+      onMeta?: (sources: Array<{ type: string; id: number; title: string; quote?: string }>) => void
+      onDone?: () => void
+    },
+    options?: { timeoutMs?: number },
+  ): Promise<void> {
+    const timeoutMs = options?.timeoutMs ?? 120_000
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), timeoutMs)
+    const token = getToken()
+    try {
+      const res = await fetch('/api/assistant/chat/stream', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({ query: message, record_id: contextRecordId ?? null }),
+        signal: controller.signal,
+      })
+      if (!res.ok) {
+        let detail = `HTTP ${res.status}`
+        try {
+          const data = await res.json()
+          detail = data?.detail || detail
+        } catch {
+          // 非 JSON 错误体，保留状态码
+        }
+        throw new Error(detail)
+      }
+      if (!res.body) {
+        throw new Error('当前浏览器不支持流式读取')
+      }
+
+      const reader = res.body.getReader()
+      const decoder = new TextDecoder('utf-8')
+      let buffer = ''
+      let finished = false
+      while (!finished) {
+        const { value, done } = await reader.read()
+        finished = Boolean(done)
+        if (value) buffer += decoder.decode(value, { stream: true })
+
+        let boundary = buffer.indexOf('\n\n')
+        while (boundary >= 0) {
+          const frame = buffer.slice(0, boundary)
+          buffer = buffer.slice(boundary + 2)
+          let eventName = 'message'
+          let dataLine = ''
+          for (const line of frame.split('\n')) {
+            if (line.startsWith('event:')) eventName = line.slice(6).trim()
+            else if (line.startsWith('data:')) dataLine += line.slice(5).trim()
+          }
+          if (dataLine) {
+            let payload: any = null
+            try {
+              payload = JSON.parse(dataLine)
+            } catch {
+              payload = null
+            }
+            if (payload) {
+              if (eventName === 'delta' && payload.text) handlers.onDelta?.(String(payload.text))
+              else if (eventName === 'meta') handlers.onMeta?.(Array.isArray(payload.sources) ? payload.sources : [])
+              else if (eventName === 'done') handlers.onDone?.()
+              else if (eventName === 'error') throw new Error(payload.message || '模型调用失败')
+            }
+          }
+          boundary = buffer.indexOf('\n\n')
+        }
+      }
+    } catch (err: any) {
+      if (err?.name === 'AbortError' || controller.signal.aborted) {
+        throw new Error(`回复超时（${Math.round(timeoutMs / 1000)} 秒），请重试`)
+      }
+      throw err
+    } finally {
+      clearTimeout(timer)
+    }
   },
 
   /** 真实大模型连通性与延迟探测 */
@@ -406,6 +528,28 @@ export const assistantApi = {
     return await http.post(`/assistant/threads/${threadId}/split-source`, { record_id: recordId })
   },
 
+  async mergeThreads(threadId: number, sourceThreadId: number): Promise<{ ok: boolean; merge_id: number }> {
+    return http.post(`/assistant/threads/${threadId}/merge`, { source_thread_id: sourceThreadId })
+  },
+  async undoMerge(mergeId: number): Promise<void> {
+    await http.post(`/assistant/merges/${mergeId}/undo`, {})
+  },
+  async updateTask(threadId: number, taskId: string, changes: Partial<AssistantTask>): Promise<void> {
+    await http.patch(`/assistant/threads/${threadId}/tasks/${taskId}`, changes)
+  },
+  async extractMissingTasks(threadId: number): Promise<{ processed: number; errors: { record_id: number; reason: string }[] }> {
+    return http.post(`/assistant/threads/${threadId}/extract-missing-tasks`, {})
+  },
+  async refreshSourceSummary(recordId: number): Promise<void> {
+    await http.post(`/assistant/records/${recordId}/source-summary`, {})
+  },
+  async sourceSummaryStatus(recordId: number): Promise<{ status: string; error: string }> {
+    return http.get(`/assistant/records/${recordId}/source-summary`)
+  },
+  async dismissSuggestion(threadId: number, candidateId: number): Promise<void> {
+    await http.post(`/assistant/threads/${threadId}/suggestions/${candidateId}/dismiss`, {})
+  },
+
   /** 关联助手记录到工作台事项 */
   async linkWorkbench(recordId: number, wbItemId: number): Promise<{
     ok: boolean
@@ -418,23 +562,11 @@ export const assistantApi = {
 
   /** 取消助手记录与工作台事项关联 */
   async unlinkWorkbench(recordId: number): Promise<{ ok: boolean; record_id: number }> {
-    return await http.delete(`/assistant/records/${recordId}/link-workbench`)
+    return await http.del(`/assistant/records/${recordId}/link-workbench`)
   },
 
   /** 获取所有可用工作台事项轻量列表 */
   async getWorkbenchItems(): Promise<{ id: number; title: string; parent_id?: number | null }[]> {
     return await http.get('/assistant/workbench-items')
-  },
-
-  /** 真实有据问答对话调用 */
-  async chat(message: string, contextRecordId?: number): Promise<string> {
-    const res = await http.post<{ answer?: string; sources_used?: number }>('/assistant/chat', {
-      query: message,
-      record_id: contextRecordId,
-    })
-    if (res && res.answer) {
-      return res.answer
-    }
-    return '未获取到回答，请检查后台助手状态或稍后重试。'
   },
 }

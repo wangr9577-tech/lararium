@@ -38,6 +38,8 @@
         </div>
       </div>
 
+      <DiaryAssistant />
+
       <!-- 顶部统一输入区 -->
       <div
         class="input-card glass"
@@ -47,19 +49,10 @@
         @drop.prevent="onFileDrop"
       >
         <div class="input-card-header">
-          <div class="kind-switcher">
-            <span class="switcher-label">收录意图：</span>
-            <el-radio-group v-model="inputKind" size="small">
-              <el-radio-button value="auto">
-                <el-icon style="margin-right: 3px"><Compass /></el-icon>自动判断
-              </el-radio-button>
-              <el-radio-button value="notice">
-                <el-icon style="margin-right: 3px"><WarningFilled /></el-icon>通知事项
-              </el-radio-button>
-              <el-radio-button value="later">
-                <el-icon style="margin-right: 3px"><Clock /></el-icon>稍后看
-              </el-radio-button>
-            </el-radio-group>
+          <div class="unified-input-title">
+            <el-icon style="margin-right: 5px; color: var(--el-color-primary);"><Compass /></el-icon>
+            <span style="font-weight: 600;">智能信息收录</span>
+            <span style="font-size: 12px; color: var(--el-text-color-secondary); margin-left: 8px;">自动提炼核心摘要、待办事项与截止时间</span>
           </div>
           <span class="shortcut-tip">支持快捷键 Ctrl + Enter 极速提交</span>
         </div>
@@ -71,7 +64,7 @@
             v-model="inputContent"
             type="textarea"
             :rows="3"
-            placeholder="在此粘贴群通知、邮件公告正文、网页链接，或直接截图按 Ctrl+V 粘贴图片..."
+            placeholder="在此粘贴通知公告、邮件正文、会议安排、论文/项目链接、文章资料，或直接按 Ctrl+V 粘贴截图..."
             resize="vertical"
             @paste="onTextareaPaste"
             @keydown.ctrl.enter="submitInput"
@@ -130,7 +123,7 @@
             <el-icon><UploadFilled /></el-icon>
             <span>支持拖入图片或附件文件</span>
             <label class="file-upload-btn" title="选择图片或附件">
-              <input type="file" accept="image/*,.pdf,.txt,.md" class="hidden-file-input" @change="onFileInputChange" />
+              <input type="file" accept="image/*,.pdf,.docx,.txt,.md" class="hidden-file-input" @change="onFileInputChange" />
               <span>选择文件</span>
             </label>
           </div>
@@ -151,17 +144,17 @@
       <!-- 中间筛选与搜索条 -->
       <div class="filter-bar glass">
         <el-tabs v-model="activeTab" class="filter-tabs" @tab-change="onTabChange">
-          <el-tab-pane label="全部" name="all" />
+          <el-tab-pane label="全部记录" name="all" />
+          <el-tab-pane label="通知事项" name="notice" />
+          <el-tab-pane label="稍后看" name="later" />
           <el-tab-pane name="alerts">
             <template #label>
               <span class="tab-badge-wrap">
-                需要注意
+                待办与截止期
                 <span v-if="alertCount > 0" class="badge-dot">{{ alertCount }}</span>
               </span>
             </template>
           </el-tab-pane>
-          <el-tab-pane label="通知事项" name="notice" />
-          <el-tab-pane label="稍后看" name="later" />
           <el-tab-pane label="已归档" name="archived" />
         </el-tabs>
 
@@ -204,11 +197,8 @@
             <!-- 头部类型标识与元数据 -->
             <div class="card-top">
               <div class="kind-tag-group">
-                <span class="kind-badge" :class="item.kind">
-                  {{ item.kind === 'notice' ? '通知事项' : '稍后看' }}
-                </span>
-                <span v-if="item.category" class="category-pill">{{ item.category }}</span>
-                <span v-if="item.kind === 'notice' && item.thread?.source_count" class="category-pill">{{ item.thread.source_count }} 条通知</span>
+                <span class="category-pill" :class="item.category">{{ item.category || '记录' }}</span>
+                <span v-if="item.thread?.source_count && item.thread.source_count > 1" class="category-pill">已合并 {{ item.thread.source_count }} 条通知</span>
                 <span v-if="item.status === 'pending' || item.status === 'processing'" class="category-pill">正在整理</span>
                 <span v-else-if="item.status === 'failed'" class="category-pill failed-pill">
                   <el-icon style="margin-right:2px"><WarningFilled /></el-icon>整理失败
@@ -226,8 +216,8 @@
                 </span>
               </div>
 
-              <!-- DDL 倒计时标签（通知类） -->
-              <div v-if="item.kind === 'notice' && item.deadline_date" class="ddl-pill" :class="getDdlStatus(item.deadline_date).urgency">
+              <!-- DDL 倒计时标签（任意含有截止期的卡片展示） -->
+              <div v-if="item.deadline_date" class="ddl-pill" :class="getDdlStatus(item.deadline_date).urgency">
                 <el-icon style="margin-right: 3px"><Clock /></el-icon>
                 <span>DDL: {{ item.deadline_date }} {{ item.deadline_time || '' }} ({{ getDdlStatus(item.deadline_date).label }})</span>
               </div>
@@ -238,6 +228,17 @@
             <!-- 卡片核心标题 -->
             <div class="card-title-row">
               <h3 class="card-title" :title="item.title">{{ item.title }}</h3>
+            </div>
+            <div v-if="item.kind === 'notice' && ((item.thread?.source_deadlines?.length || 0) > 0 || item.tasks?.some(task => task.deadline_date))" class="deadline-section">
+              <div class="deadline-heading">各事项截止时间</div>
+              <div v-for="deadline in item.thread?.source_deadlines || []" :key="`source-${deadline.record_id}`" class="deadline-line">
+                {{ deadline.title }}：{{ deadline.date }} {{ deadline.time }}
+              </div>
+              <div v-for="task in (item.tasks || []).filter(task => task.deadline_date)" :key="`task-${task.id}`" class="deadline-line" @click.stop>
+                {{ task.title }}：{{ task.deadline_date }} {{ task.deadline_time }}
+                <span v-if="task.date_conflict">（时间有冲突，请核对）</span>
+                <el-button size="small" text @click="editTask(item, task)">编辑</el-button>
+              </div>
             </div>
 
             <!-- 整理失败醒目警告条 -->
@@ -252,34 +253,50 @@
             </div>
 
             <!-- 通知事项卡片展示：最新变动提示条 -->
-            <div v-if="item.kind === 'notice' && item.latest_change" class="latest-change-banner">
+            <div v-if="item.latest_change && (item.kind !== 'notice' || item.has_conflict)" class="latest-change-banner">
               <el-icon class="banner-icon"><WarningFilled /></el-icon>
               <span class="banner-text"><strong>最新变动：</strong>{{ item.latest_change }}</span>
             </div>
-
-            <!-- 核心摘要 / 简介 -->
-            <div class="card-summary">
-              {{ item.summary || item.content || '暂无详细摘要内容' }}
+            <div v-for="suggestion in item.thread?.suggestions || []" :key="suggestion.id" class="latest-change-banner" @click.stop>
+              <span>可能属于同一事项：{{ suggestion.title }}</span>
+              <el-button size="small" text @click="mergeSuggestion(item, suggestion.id)">合并</el-button>
+              <el-button size="small" text @click="dismissSuggestion(item, suggestion.id)">不是同一事项</el-button>
             </div>
 
-            <!-- 核心依据原文段落简要透出 -->
-            <div v-if="item.quote" class="card-quote-snippet">
+            <!-- 一段信息依次展示来源、消息框与对应原句。 -->
+            <div v-if="item.kind === 'notice' && item.thread?.source_messages?.length" class="source-messages">
+              <section v-for="source in item.thread.source_messages" :key="source.record_id" class="source-message">
+                <div class="source-origin" @click.stop="openSourceRecord(source.record_id)">
+                  <span class="source-origin-label">包含来源</span>
+                  <span class="source-origin-title">{{ source.title }}</span>
+                  <button type="button" class="source-open">查看原文</button>
+                </div>
+                <div class="source-message-box">
+                  <template v-if="source.summary">
+                    <div v-for="(sentence, index) in splitSentences(source.summary)" :key="index" class="source-sentence">{{ sentence }}</div>
+                  </template>
+                  <div v-else class="source-summary-pending">
+                    <span>{{ sourceSummaryJobs[source.record_id]?.status === 'running' ? '正在整理这段信息…' : '这段信息尚无独立摘要' }}</span>
+                    <el-button v-if="sourceSummaryJobs[source.record_id]?.status !== 'running'" size="small" text @click.stop="refreshSourceSummary(source.record_id)">整理这段信息</el-button>
+                  </div>
+                </div>
+                <div class="source-evidence-box">
+                  <div class="source-evidence-label">依据原句</div>
+                  <template v-if="source.evidence_quotes.length">
+                    <div v-for="(sentence, index) in splitSourceQuotes(source.evidence_quotes)" :key="index" class="source-evidence-sentence">{{ sentence }}</div>
+                  </template>
+                  <div v-else class="source-evidence-missing">暂无可核对的原句，请查看来源原文。</div>
+                </div>
+              </section>
+            </div>
+            <div v-else class="card-summary">{{ item.summary || item.content || '暂无详细摘要内容' }}</div>
+            <div v-if="item.kind !== 'notice' && item.quote" class="card-quote-snippet">
               <span class="quote-tag">📌 依据原句</span>
               <span class="quote-snippet-text" :title="item.quote">{{ item.quote }}</span>
             </div>
 
-            <!-- 通知事项卡片展示：特别注意/材料清单 -->
-            <div v-if="item.kind === 'notice' && item.highlights?.length" class="highlights-box">
-              <div class="hl-header">特别注意与材料：</div>
-              <div class="hl-tags">
-                <span v-for="(hl, hIdx) in item.highlights" :key="hIdx" class="hl-tag">
-                  {{ hl }}
-                </span>
-              </div>
-            </div>
-
             <!-- 稍后看卡片展示：关注理由与我的备注 -->
-            <div v-if="item.kind === 'later' && (item.reason || item.user_note)" class="reason-box">
+            <div v-if="item.kind !== 'notice' && (item.reason || item.user_note)" class="reason-box">
               <div class="reason-label">关注理由：</div>
               <div class="reason-content">{{ item.reason || item.user_note }}</div>
             </div>
@@ -300,51 +317,36 @@
 
             <!-- 底部操作按钮栏 -->
             <div class="card-actions" @click.stop>
-              <!-- 失败状态显式控制按钮：重新处理 与 规则降级整理 -->
+              <!-- 失败状态只提供真实重试：不做规则降级伪装 -->
               <template v-if="item.status === 'failed'">
                 <el-button size="small" round type="danger" plain @click="retryRecord(item)">
                   <el-icon><RefreshRight /></el-icon>重新处理 (重试)
                 </el-button>
-                <el-button size="small" round type="warning" plain @click="fallbackRuleRecord(item)">
-                  <el-icon><Tools /></el-icon>改用规则降级整理
-                </el-button>
               </template>
-              <!-- 通知事项操作 -->
-              <template v-if="item.kind === 'notice'">
-                <el-button size="small" round text @click="openRawDetail(item)">
-                  <el-icon><Document /></el-icon>查看原文
-                </el-button>
-                <el-button size="small" round text @click="goToSchedule(item)">
-                  <el-icon><Calendar /></el-icon>查看日程
-                </el-button>
-                <el-button
-                  size="small"
-                  round
-                  :type="item.thread?.status === 'completed' ? 'success' : 'default'"
-                  @click="toggleComplete(item)"
-                >
-                  <el-icon><Finished /></el-icon>{{ item.thread?.status === 'completed' ? '已完成' : '完成' }}
-                </el-button>
-                <el-button size="small" round text @click="toggleArchive(item)">
-                  {{ item.archived ? '恢复' : '归档' }}
-                </el-button>
-              </template>
-
-              <!-- 稍后看操作 -->
+              <!-- 统一卡片操作 -->
               <template v-else>
+                <el-button v-if="item.kind === 'notice' && item.thread?.id" size="small" round text @click="mergeItem(item)">合并事项</el-button>
+                <el-button v-if="item.kind === 'notice' && item.thread?.id" size="small" round text @click="extractMissingTasks(item)">补提待办</el-button>
+                <el-button v-if="item.thread?.last_manual_merge_id" size="small" round text @click="undoMerge(item)">撤销合并</el-button>
                 <el-button v-if="item.source_url" size="small" round text @click="openSourceUrl(item.source_url)">
                   <el-icon><Link /></el-icon>打开来源
                 </el-button>
-                <el-button
-                  size="small"
-                  round
-                  :type="item.read_state === 'read' ? 'success' : 'default'"
-                  @click="toggleReadState(item)"
-                >
-                  <el-icon><Check /></el-icon>{{ item.read_state === 'read' ? '已看过' : '看过了' }}
+                <el-button v-if="item.deadline_date" size="small" round text @click="goToSchedule(item)">
+                  <el-icon><Calendar /></el-icon>查看日程
+                </el-button>
+                <el-button size="small" round text @click="openRawDetail(item)">
+                  <el-icon><Document /></el-icon>详情与原文
                 </el-button>
                 <el-button size="small" round type="primary" plain @click="writeNoteFromRecord(item)">
                   <el-icon><EditPen /></el-icon>写笔记
+                </el-button>
+                <el-button
+                  size="small"
+                  round
+                  :type="(item.deadline_date ? item.thread?.status === 'completed' : item.read_state === 'read') ? 'success' : 'default'"
+                  @click="item.deadline_date ? toggleComplete(item) : toggleReadState(item)"
+                >
+                  <el-icon><Check /></el-icon>{{ (item.deadline_date ? item.thread?.status === 'completed' : item.read_state === 'read') ? '已完成' : (item.deadline_date ? '完成' : '已读') }}
                 </el-button>
                 <el-button size="small" round text @click="toggleArchive(item)">
                   {{ item.archived ? '恢复' : '归档' }}
@@ -373,7 +375,6 @@
         @write-note="writeNoteFromRecord"
         @split-source="handleSplitSource"
         @retry="retryRecord"
-        @fallback-rule="fallbackRuleRecord"
       />
     </aside>
 
@@ -395,7 +396,6 @@
         @write-note="writeNoteFromRecord"
         @split-source="handleSplitSource"
         @retry="retryRecord"
-        @fallback-rule="fallbackRuleRecord"
       />
     </el-drawer>
 
@@ -443,8 +443,9 @@
 </template>
 
 <script setup lang="ts">
-import { computed, defineComponent, h, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, defineComponent, h, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
+import DiaryAssistant from '../components/DiaryAssistant.vue'
 import {
   ElMessage,
   ElMessageBox,
@@ -461,7 +462,7 @@ import {
 import {
   ChatLineRound, Refresh, Compass, WarningFilled, Clock, Document,
   Close, EditPen, UploadFilled, Promotion, Search, Link, Calendar,
-  Finished, Check, ArrowRight, UserFilled, CircleCloseFilled, Tools,
+  Finished, Check, ArrowRight, UserFilled, CircleCloseFilled,
   RefreshRight, Odometer, CopyDocument, Paperclip, View, Download, Picture
 } from '@element-plus/icons-vue'
 import {
@@ -470,6 +471,7 @@ import {
   type AssistantFilter,
   type AssistantChatMessage,
   type AssistantAttachment,
+  type AssistantTask,
   type LlmDiagnostics
 } from '../api/assistant'
 
@@ -491,6 +493,7 @@ const router = useRouter()
 const loading = ref(false)
 const submitting = ref(false)
 const records = ref<AssistantRecord[]>([])
+const sourceSummaryJobs = ref<Record<number, { status: string; error: string }>>({})
 const selectedItem = ref<AssistantRecord | null>(null)
 const activeTab = ref<AssistantFilter>('all')
 const searchQuery = ref('')
@@ -718,6 +721,14 @@ async function refreshList() {
   loading.value = true
   try {
     records.value = await assistantApi.list(activeTab.value, searchQuery.value)
+    const pendingSources = records.value.flatMap(item => item.thread?.source_messages || [])
+      .filter(source => source.needs_summary && !sourceSummaryJobs.value[source.record_id])
+    await Promise.all(pendingSources.map(async source => {
+      try {
+        const status = await assistantApi.sourceSummaryStatus(source.record_id)
+        if (status.status === 'running') sourceSummaryJobs.value[source.record_id] = status
+      } catch { /* 列表仍可正常查看 */ }
+    }))
     if (!selectedItem.value && records.value.length) {
       selectedItem.value = records.value[0]
       // 预拉取首项详情
@@ -748,18 +759,6 @@ async function retryRecord(item: AssistantRecord) {
   }
 }
 
-async function fallbackRuleRecord(item: AssistantRecord) {
-  try {
-    await assistantApi.fallbackRule(item.id)
-    item.status = 'pending'
-    ElMessage.success('已切换为规则降级整理中...')
-    await refreshList()
-  } catch (err: any) {
-    const detail = err?.response?.data?.detail
-    ElMessage.error(typeof detail === 'string' ? `操作失败：${detail}` : '操作失败，请稍后再试')
-  }
-}
-
 async function refreshProcessing() {
   if (refreshingProcessing || !records.value.some((item) => item.status === 'pending' || item.status === 'processing')) return
   refreshingProcessing = true
@@ -783,29 +782,18 @@ async function refreshProcessing() {
 
 const filteredRecords = computed(() => records.value)
 
-// 通知由后端按具体事项聚合；不同的论文和项目只按类别归入同一收集卡，保留各自的详情。
+// 统一卡片流：每条记录保持独立卡片展示与清晰的操作闭环
 const recordGroups = computed(() => {
-  const groups: { key: string; title: string; isCollection: boolean; items: AssistantRecord[] }[] = []
-  const collections = new Map<string, typeof groups[number]>()
-  for (const item of filteredRecords.value) {
-    if (item.kind !== 'later' || item.status !== 'ready') {
-      groups.push({ key: `record:${item.id}`, title: item.title, isCollection: false, items: [item] })
-      continue
-    }
-    const category = item.category || '其他'
-    let group = collections.get(category)
-    if (!group) {
-      group = { key: `category:${category}`, title: category, isCollection: true, items: [] }
-      collections.set(category, group)
-      groups.push(group)
-    }
-    group.items.push(item)
-  }
-  return groups
+  return filteredRecords.value.map((item) => ({
+    key: `record:${item.id}`,
+    title: item.title,
+    isCollection: false,
+    items: [item]
+  }))
 })
 
 const alertCount = computed(() => {
-  return records.value.filter((r) => r.kind === 'notice' && (r.deadline_date || r.latest_change || r.has_conflict)).length
+  return records.value.filter((r) => r.deadline_date || r.latest_change || r.has_conflict).length
 })
 
 async function selectItem(item: AssistantRecord) {
@@ -942,11 +930,131 @@ async function handleSplitSource(payload: { threadId: number; recordId: number }
   }
 }
 
+async function updateTask(item: AssistantRecord, task: AssistantTask, changes: Partial<AssistantTask>) {
+  if (!item.thread?.id) return
+  try {
+    await assistantApi.updateTask(item.thread.id, task.id, changes)
+    await refreshList()
+  } catch (err: any) {
+    ElMessage.error(err?.response?.data?.detail || err?.message || '更新待办失败')
+  }
+}
+
+async function openSourceRecord(id: number) {
+  const record = await assistantApi.get(id)
+  if (record) {
+    selectedItem.value = record
+    sideMode.value = 'detail'
+    if (!isLargeScreen.value) drawerVisible.value = true
+  }
+}
+
+function splitSentences(text: string): string[] {
+  return text.split(/(?<=[。！？；])|(?<=[.!?])(?=\s|$)|\r?\n+/u).map(part => part.trim()).filter(Boolean)
+}
+
+function splitSourceQuotes(quotes: string[]): string[] {
+  return quotes.flatMap(quote => splitSentences(quote))
+}
+
+async function refreshSourceSummary(recordId: number) {
+  try {
+    await assistantApi.refreshSourceSummary(recordId)
+    sourceSummaryJobs.value[recordId] = { status: 'running', error: '' }
+  } catch (err: any) {
+    ElMessage.error(err?.response?.data?.detail || err?.message || '无法整理这段信息')
+  }
+}
+
+async function refreshSourceSummaryJobs() {
+  for (const idText of Object.keys(sourceSummaryJobs.value)) {
+    const id = Number(idText)
+    if (sourceSummaryJobs.value[id]?.status !== 'running') continue
+    try {
+      const status = await assistantApi.sourceSummaryStatus(id)
+      sourceSummaryJobs.value[id] = status
+      if (status.status !== 'running') {
+        await refreshList()
+        if (status.status === 'done') ElMessage.success('这段信息已整理')
+        else ElMessage.warning(status.error || '无法整理，请查看原文')
+      }
+    } catch { /* 下次轮询时重试 */ }
+  }
+}
+
+async function editTask(item: AssistantRecord, task: AssistantTask) {
+  try {
+    const title = await ElMessageBox.prompt('修改待办名称', '编辑待办', { inputValue: task.title })
+    const date = await ElMessageBox.prompt('截止日期（YYYY-MM-DD，留空表示未确定）', '编辑时间', { inputValue: task.deadline_date || '' })
+    const time = await ElMessageBox.prompt('截止时间（HH:MM，留空表示未确定）', '编辑时间', { inputValue: task.deadline_time || '' })
+    await updateTask(item, task, { title: title.value, deadline_date: date.value || '', deadline_time: time.value || '' })
+  } catch { /* 用户取消 */ }
+}
+
+async function mergeItem(item: AssistantRecord) {
+  if (!item.thread?.id) return
+  try {
+    const all = await assistantApi.list('all')
+    const candidates = all.filter(r => r.thread?.id && r.thread.id !== item.thread?.id)
+    if (!candidates.length) { ElMessage.info('没有其他可合并的事项'); return }
+    const labels = candidates.map((r, i) => `${i + 1}. ${r.title}`).join('\n')
+    const result = await ElMessageBox.prompt(`输入要合并进当前事项的编号：\n${labels}`, '合并事项', {
+      inputPattern: /^\d+$/, inputErrorMessage: '请输入编号', inputPlaceholder: '事项编号',
+      customClass: 'assistant-merge-dialog'
+    })
+    const chosen = candidates[Number(result.value) - 1]
+    if (!chosen?.thread?.id) { ElMessage.error('编号不存在'); return }
+    await assistantApi.mergeThreads(item.thread.id, chosen.thread.id)
+    ElMessage.success('事项已合并，可在卡片上撤销')
+    await refreshList()
+  } catch (err: any) {
+    if (err !== 'cancel' && err !== 'close') ElMessage.error(err?.response?.data?.detail || err?.message || '合并失败')
+  }
+}
+
+async function undoMerge(item: AssistantRecord) {
+  const mergeId = item.thread?.last_manual_merge_id
+  if (!mergeId) return
+  try {
+    await assistantApi.undoMerge(mergeId)
+    await refreshList()
+    ElMessage.success('已撤销合并')
+  } catch (err: any) { ElMessage.error(err?.response?.data?.detail || err?.message || '撤销失败') }
+}
+
+async function mergeSuggestion(item: AssistantRecord, candidateId: number) {
+  if (!item.thread?.id) return
+  try {
+    await assistantApi.mergeThreads(item.thread.id, candidateId)
+    await refreshList()
+    ElMessage.success('已合并事项')
+  } catch (err: any) { ElMessage.error(err?.response?.data?.detail || err?.message || '合并失败') }
+}
+
+async function dismissSuggestion(item: AssistantRecord, candidateId: number) {
+  if (!item.thread?.id) return
+  try {
+    await assistantApi.dismissSuggestion(item.thread.id, candidateId)
+    await refreshList()
+  } catch (err: any) { ElMessage.error(err?.response?.data?.detail || err?.message || '操作失败') }
+}
+
+async function extractMissingTasks(item: AssistantRecord) {
+  if (!item.thread?.id) return
+  try {
+    ElMessage.info('正在从历史通知中提取缺失待办，请稍候')
+    const result = await assistantApi.extractMissingTasks(item.thread.id)
+    await refreshList()
+    if (result.errors.length) ElMessage.warning(`处理 ${result.processed} 条，${result.errors.length} 条未能处理：${result.errors[0].reason}`)
+    else ElMessage.success(`已处理 ${result.processed} 条历史通知`)
+  } catch (err: any) { ElMessage.error(err?.response?.data?.detail || err?.message || '提取失败') }
+}
+
 onMounted(() => {
   window.addEventListener('resize', handleResize)
   refreshList()
   runDiagnostics()
-  processingTimer = setInterval(refreshProcessing, 3000)
+  processingTimer = setInterval(() => { refreshProcessing(); refreshSourceSummaryJobs() }, 3000)
 })
 
 onBeforeUnmount(() => {
@@ -967,7 +1075,7 @@ const SidePanelContent = defineComponent({
       default: 'detail'
     }
   },
-  emits: ['update:activeMode', 'close', 'writeNote', 'splitSource', 'retry', 'fallbackRule'],
+  emits: ['update:activeMode', 'close', 'writeNote', 'splitSource', 'retry'],
   setup(props, { emit }) {
     const showErrorDetails = ref(false)
     const chatInput = ref('')
@@ -988,6 +1096,22 @@ const SidePanelContent = defineComponent({
       '帮我起草这篇论文的笔记提纲'
     ]
 
+    const chatSources = ref<Array<{ type: string; id: number; title: string }>>([])
+
+    // 还没收到第一个 token 时才显示“思考回答中”，避免和流式气泡重复。
+    const showThinking = computed(() => {
+      if (!chatBusy.value) return false
+      const last = messages.value[messages.value.length - 1]
+      return !(last && last.role === 'assistant' && last.content)
+    })
+
+    function scrollChatToBottom() {
+      nextTick(() => {
+        const el = document.querySelector('.chat-scroll-area') as HTMLElement | null
+        if (el) el.scrollTop = el.scrollHeight
+      })
+    }
+
     function setMode(m: 'detail' | 'chat') {
       emit('update:activeMode', m)
     }
@@ -1005,24 +1129,44 @@ const SidePanelContent = defineComponent({
 
       chatInput.value = ''
       chatBusy.value = true
+      chatSources.value = []
+
+      const replyId = String(Date.now() + 1)
+      messages.value.push({
+        id: replyId,
+        role: 'assistant',
+        content: '',
+        created_at: '刚刚'
+      })
+      const replyIndex = messages.value.length - 1
 
       try {
-        const reply = await assistantApi.chat(q, props.selectedItem?.id)
-        messages.value.push({
-          id: String(Date.now() + 1),
-          role: 'assistant',
-          content: reply,
-          created_at: '刚刚'
-        })
-      } catch {
-        messages.value.push({
-          id: String(Date.now() + 1),
-          role: 'assistant',
-          content: '回复生成超时，请稍后重试。',
-          created_at: '刚刚'
-        })
+        await assistantApi.chatStream(
+          q,
+          props.selectedItem?.id,
+          {
+            onMeta: (sources) => {
+              chatSources.value = Array.isArray(sources) ? sources : []
+            },
+            onDelta: (text) => {
+              messages.value[replyIndex].content += text
+              scrollChatToBottom()
+            }
+          },
+          { timeoutMs: 120_000 }
+        )
+        if (!messages.value[replyIndex].content) {
+          messages.value[replyIndex].content = '（模型没有返回内容，请重试）'
+        }
+      } catch (err: any) {
+        const reason = err?.message || '回复生成失败，请稍后重试'
+        const partial = messages.value[replyIndex].content
+        messages.value[replyIndex].content = partial
+          ? `${partial}\n\n（生成中断：${reason}）`
+          : `⚠️ ${reason}`
       } finally {
         chatBusy.value = false
+        scrollChatToBottom()
       }
     }
 
@@ -1051,7 +1195,7 @@ const SidePanelContent = defineComponent({
           if (index > 0) {
             type = 'warning'
             color = '#e6a23c'
-            if (src.change_type === 'extend') {
+            if (src.change_type === 'postpone') {
               title = `第 ${index + 1} 封通知（截止时间顺延）`
               type = 'success'
               color = '#67c23a'
@@ -1070,7 +1214,7 @@ const SidePanelContent = defineComponent({
 
           events.push({
             title,
-            time: src.received_at || item.created_at,
+            time: `导入时间：${src.received_at || item.created_at}`,
             type,
             color,
             desc: src.change_reason || src.summary || (index === 0 ? item.title : '通知内容更新'),
@@ -1157,7 +1301,7 @@ const SidePanelContent = defineComponent({
                 // 详情头部
                 h('div', { class: 'detail-header' }, [
                   h('div', { class: 'detail-kind-row' }, [
-                    h('span', { class: ['kind-badge', item.kind] }, item.kind === 'notice' ? '通知事项' : '稍后看'),
+                    h('span', { class: ['category-pill', item.category] }, item.category || '记录'),
                     item.category ? h('span', { class: 'category-pill' }, item.category) : null,
                     item.status === 'failed'
                       ? h('span', { class: 'category-pill failed-pill' }, '整理失败')
@@ -1167,12 +1311,12 @@ const SidePanelContent = defineComponent({
                   h('h2', { class: 'detail-title' }, item.title)
                 ]),
 
-                // 整理失败面板（若失败，显式透出真实错误原因并提供重新处理与规则降级整理按钮）
+                // 整理失败面板（显式透出真实错误原因，只提供重试，不做规则降级伪装）
                 item.status === 'failed'
                   ? h('div', { class: 'detail-failed-alert' }, [
                       h('div', { class: 'df-alert-title-row' }, [
                         h(ElIcon, { class: 'df-alert-ico' }, () => [h(CircleCloseFilled)]),
-                        h('span', { class: 'df-alert-title' }, '整理失败：模型连接不可用')
+                        h('span', { class: 'df-alert-title' }, '整理失败')
                       ]),
                       h('div', { class: 'df-alert-actions' }, [
                         h(
@@ -1184,16 +1328,6 @@ const SidePanelContent = defineComponent({
                             onClick: () => emit('retry', item)
                           },
                           () => [h(ElIcon, { style: 'margin-right:4px' }, () => [h(RefreshRight)]), '重新处理 (重试)']
-                        ),
-                        h(
-                          ElButton,
-                          {
-                            size: 'small',
-                            type: 'warning',
-                            round: true,
-                            onClick: () => emit('fallbackRule', item)
-                          },
-                          () => [h(ElIcon, { style: 'margin-right:4px' }, () => [h(Tools)]), '改用规则降级整理']
                         ),
                         h(
                           ElButton,
@@ -1410,7 +1544,7 @@ const SidePanelContent = defineComponent({
                 ]),
 
                 // 通知演变时间轴 (仅通知事项展示)
-                item.kind === 'notice'
+                Boolean(item.thread_id || (item.thread?.sources && item.thread.sources.length > 1))
                   ? h('div', { class: 'detail-section' }, [
                       h('div', { class: 'section-head' }, [
                         h('span', { class: 'section-title' }, '通知演变历程')
@@ -1462,7 +1596,7 @@ const SidePanelContent = defineComponent({
 
                 // 快捷操作
                 h('div', { class: 'detail-footer-ops' }, [
-                  item.kind === 'later'
+                  true
                     ? h(
                         ElButton,
                         {
@@ -1499,7 +1633,15 @@ const SidePanelContent = defineComponent({
                     ]
                   )
                 ),
-                chatBusy.value
+                chatSources.value.length
+                  ? h('div', { class: 'chat-sources' }, [
+                      h('span', { class: 'src-label' }, '依据：'),
+                      ...chatSources.value.slice(0, 4).map((s) =>
+                        h('span', { key: `${s.type}-${s.id}`, class: 'src-chip' }, s.title)
+                      )
+                    ])
+                  : null,
+                showThinking.value
                   ? h('div', { class: 'chat-bubble-row assistant' }, [
                       h('span', { class: 'asst-avatar' }, '助'),
                       h('div', { class: 'bubble-content loading' }, '思考回答中...')
@@ -1952,40 +2094,36 @@ const SidePanelContent = defineComponent({
   color: var(--el-color-warning);
 }
 
+.banner-text { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.65; }
+
 .card-summary {
   font-size: 13px;
   color: var(--el-text-color-regular);
   line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
-/* 特别注意列表 */
-.highlights-box {
-  background: rgba(0, 0, 0, 0.15);
-  border-radius: 6px;
-  padding: 8px 10px;
-}
-
-.hl-header {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--el-color-danger);
-  margin-bottom: 4px;
-}
-
-.hl-tags {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
-.hl-tag {
-  background: var(--el-color-danger-light-9);
-  color: var(--el-color-danger);
-  border: 1px solid var(--el-color-danger-light-7);
-  border-radius: 4px;
-  padding: 1px 6px;
-  font-size: 12px;
-}
+.deadline-section { padding: 12px 14px; border-radius: 9px; background: var(--el-fill-color-light); display: flex; flex-direction: column; gap: 6px; }
+.deadline-heading { color: var(--el-text-color-primary); font-size: 13px; font-weight: 600; }
+.deadline-line { color: var(--el-text-color-regular); font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; }
+.source-messages { display: flex; flex-direction: column; gap: 20px; }
+.source-message { display: flex; flex-direction: column; gap: 8px; }
+.source-origin { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 9px 12px; border: 1px solid var(--el-border-color); border-radius: 8px; cursor: pointer; }
+.source-origin-label { flex-shrink: 0; color: var(--el-color-primary); font-size: 12px; font-weight: 600; }
+.source-origin-title { flex: 1; color: var(--el-text-color-primary); font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
+.source-open { padding: 0; border: 0; background: transparent; color: var(--el-color-primary); font-size: 12px; cursor: pointer; }
+.source-message-box { padding: 12px 14px; background: var(--el-fill-color-light); border-radius: 8px; color: var(--el-text-color-primary); font-size: 13px; line-height: 1.75; }
+.source-sentence, .source-evidence-sentence { white-space: pre-wrap; overflow-wrap: anywhere; }
+.source-sentence + .source-sentence, .source-evidence-sentence + .source-evidence-sentence { margin-top: 5px; }
+.source-summary-pending { color: var(--el-text-color-secondary); display: flex; align-items: center; gap: 8px; }
+.source-evidence-box { padding: 11px 14px; border-left: 3px solid var(--el-color-primary-light-5); background: var(--el-fill-color-blank); border-radius: 0 8px 8px 0; }
+.source-evidence-label { color: var(--el-color-primary); font-size: 12px; font-weight: 600; margin-bottom: 6px; }
+.source-evidence-sentence { color: var(--el-text-color-regular); font-size: 12px; line-height: 1.7; }
+.source-evidence-missing { color: var(--el-text-color-secondary); font-size: 12px; line-height: 1.6; }
+:global(html.theme-dark) .source-origin { background: rgba(255, 255, 255, 0.06); border-color: rgba(255, 255, 255, 0.2); }
+:global(html.theme-dark) .source-origin-title,
+:global(html.theme-dark) .card-title { color: #eef2fb; }
 
 .reason-box {
   background: rgba(0, 0, 0, 0.12);
@@ -2005,6 +2143,7 @@ const SidePanelContent = defineComponent({
 .reason-content {
   color: var(--el-text-color-regular);
 }
+
 
 .card-meta-row {
   display: flex;
@@ -2313,6 +2452,30 @@ const SidePanelContent = defineComponent({
   background: var(--el-color-primary);
   color: #fff;
   border-top-right-radius: 2px;
+}
+
+:deep(.chat-sources) {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 0 0 36px;
+  font-size: 11px;
+}
+
+:deep(.chat-sources .src-label) {
+  color: var(--el-text-color-secondary);
+}
+
+:deep(.chat-sources .src-chip) {
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--el-fill-color-light);
+  color: var(--el-text-color-regular);
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 :deep(.chat-chips-area) {

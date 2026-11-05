@@ -26,6 +26,10 @@ strata-restart.sh
 .dsh_processing/
 .acl-recovery/
 .e2e-shots/
+.tmp-test/
+dsh-market/
+migrate-dsh-to-d-logs/
+run-migrate-dsh-to-d.cmd
 kruskal_*_test_*
 助手测试/
 frontend/pnpm-lock.yaml

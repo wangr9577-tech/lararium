@@ -7,14 +7,16 @@
 from __future__ import annotations
 
 import base64
+import ast
 import json
+import math
 import os
 import re
 import time
 import urllib.error
 import urllib.request
-from datetime import datetime
 from pathlib import Path
+from typing import Iterator
 
 from .. import config
 
@@ -199,10 +201,17 @@ def _do_request(cfg: dict, messages: list[dict], max_tokens: int, temperature: f
         # 推理过程不是最终答案，不能将其作为结构化结果使用。
     except (KeyError, IndexError, TypeError):
         raise AiUnavailable("AI 返回格式异常")
+    if isinstance(out, list):
+        # 兼容部分 OpenAI 兼容服务返回的文本片段数组。
+        out = "\n".join(str(part.get("text", "")) for part in out
+                        if isinstance(part, dict) and part.get("type") in ("text", "output_text"))
+    if out is not None and not isinstance(out, str):
+        raise AiUnavailable("AI 返回的最终答案不是文本")
     return (out or "").strip()
 
 
-def chat(messages: list[dict], max_tokens: int = 1500, temperature: float = 0.3) -> str:
+def chat(messages: list[dict], max_tokens: int = 1500, temperature: float = 0.3,
+         timeout_override: int | None = None) -> str:
     """标准 chat 调用，返回补全文本；支持多模态；失败抛 AiUnavailable。
 
     严禁静默丢弃图片或隐蔽移除视觉输入！若请求失败，必须保留真实的失败原因。
@@ -211,6 +220,9 @@ def chat(messages: list[dict], max_tokens: int = 1500, temperature: float = 0.3)
         cfg = _cfg()
         raise AiUnavailable(f"AI 服务未启用。请检查配置或开启 SSH 隧道: {cfg['tunnel_hint']}")
     cfg = _cfg()
+    if timeout_override is not None or max_tokens >= 100000:
+        cfg = dict(cfg)
+        cfg["timeout"] = max(cfg["timeout"], timeout_override or 180)
     try:
         return _do_request(cfg, messages, max_tokens, temperature)
     except urllib.error.HTTPError as e:
@@ -245,46 +257,108 @@ def chat(messages: list[dict], max_tokens: int = 1500, temperature: float = 0.3)
 
 
 def _parse_json(text: str) -> dict:
-    """健壮提取与解析文本中的 JSON 对象。"""
-    s = text.strip()
-    # 剥离思考模型可能输出的 <think>...</think> 标签，防止内部反括号干扰 JSON 提取
-    s = re.sub(r"<think>[\s\S]*?</think>", "", s).strip()
-    if "<think>" in s or "</think>" in s:
+    """提取完整对象；允许代码块、说明文字、尾逗号和 Python 字面量。
+
+    不补全截断内容，不使用 eval，不从未闭合的外层对象提取内部片段。
+    """
+    if not isinstance(text, str):
+        raise ValueError("模型最终答案不是文本")
+    s = re.sub(r"<think\b[^>]*>[\s\S]*?</think\s*>", "", text, flags=re.I).strip().lstrip("\ufeff")
+    if re.search(r"</?think\b", s, flags=re.I):
         raise ValueError("模型思考输出未结束，缺少完整的最终答案")
 
-    # 1. 直接 json.loads
-    try:
-        data = json.loads(s)
-        if isinstance(data, dict):
-            return data
-    except Exception:
-        pass
+    def json_compatible(value):
+        if value is None or isinstance(value, (str, bool, int)):
+            return True
+        if isinstance(value, float):
+            return math.isfinite(value)
+        if isinstance(value, list):
+            return all(json_compatible(item) for item in value)
+        if isinstance(value, dict):
+            return all(isinstance(k, str) and json_compatible(v) for k, v in value.items())
+        return False
 
-    # 2. 剥离 ```json 代码块
-    m = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", s)
-    if m:
+    def parse_candidate(candidate: str):
+        # strict=False 接受字符串里的原始换行；不会修补缺失内容。
         try:
-            data = json.loads(m.group(1).strip())
-            if isinstance(data, dict):
-                return data
-        except Exception:
+            result = json.loads(candidate, strict=False)
+            if isinstance(result, dict) and json_compatible(result):
+                return result
+        except (ValueError, TypeError):
             pass
-
-    # 从每个左括号尝试解码完整对象，避免前后解释文字或多个对象干扰。
-    decoder = json.JSONDecoder()
-    for match in list(re.finditer(r"\{", s))[:1]:
+        # 只删除字符串外、紧邻 } 或 ] 的尾逗号，不改动文本字段。
+        cleaned = []
+        in_string = False
+        escape = False
+        for pos, ch in enumerate(candidate):
+            if in_string:
+                cleaned.append(ch)
+                if escape:
+                    escape = False
+                elif ch == "\\":
+                    escape = True
+                elif ch == '"':
+                    in_string = False
+                continue
+            if ch == '"':
+                in_string = True
+            if ch == "," and candidate[pos + 1:].lstrip().startswith(("}", "]")):
+                continue
+            cleaned.append(ch)
         try:
-            data, _ = decoder.raw_decode(s[match.start():])
-            if isinstance(data, dict):
-                return data
-        except Exception:
+            result = json.loads("".join(cleaned), strict=False)
+            if isinstance(result, dict) and json_compatible(result):
+                return result
+        except (ValueError, TypeError):
             pass
+        # 有些服务输出 Python 风格单引号/True/None；literal_eval 只解析字面量。
+        try:
+            result = ast.literal_eval(candidate)
+            if isinstance(result, dict) and json_compatible(result):
+                return result
+        except (ValueError, SyntaxError, TypeError, RecursionError, MemoryError):
+            pass
+        return None
 
-    raise ValueError("无法从输出中提取合法 JSON 对象")
+    # 扫描顶层花括号并正确处理字符串内的花括号及转义。
+    start = None
+    depth = 0
+    quote = None
+    escaped = False
+    for index, char in enumerate(s):
+        if start is None:
+            if char == "{":
+                start, depth, quote, escaped = index, 1, None, False
+            continue
+        if quote:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == quote:
+                quote = None
+            continue
+        if char in ('"', "'"):
+            quote = char
+        elif char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                candidate = s[start:index + 1]
+                result = parse_candidate(candidate)
+                if result is not None:
+                    return result
+                start = None
+
+    if not s:
+        raise ValueError("模型没有返回最终答案")
+    raise ValueError("无法从输出中提取完整的 JSON 对象")
 
 
 def chat_structured(messages: list[dict], system_prompt: str = "",
-                    max_tokens: int = 2000, temperature: float = 0.2) -> dict:
+                    max_tokens: int = 100000, temperature: float = 0.2,
+                    required_keys: tuple[str, ...] = (), timeout_override: int | None = None) -> dict:
     """请求结构化 JSON 输出，并进行健壮解析与校验。"""
     sys_instruction = "请严格返回合法的 JSON 对象，不要输出包含 markdown 外围解释的其他说明。"
     full_sys = f"{system_prompt}\n\n{sys_instruction}" if system_prompt else sys_instruction
@@ -300,20 +374,32 @@ def chat_structured(messages: list[dict], system_prompt: str = "",
     if not has_system:
         msgs.insert(0, {"role": "system", "content": full_sys})
 
-    raw_text = chat(msgs, max_tokens=max_tokens, temperature=temperature)
+    def parse_and_check(text: str) -> dict:
+        result = _parse_json(text)
+        missing = [key for key in required_keys if key not in result]
+        if missing:
+            raise ValueError("JSON 对象缺少必要字段：" + "、".join(missing))
+        return result
+
+    call_options = {"max_tokens": max_tokens, "temperature": temperature}
+    if timeout_override is not None:
+        call_options["timeout_override"] = timeout_override
+    raw_text = chat(msgs, **call_options)
     try:
-        return _parse_json(raw_text)
+        return parse_and_check(raw_text)
     except ValueError:
         # 保留原始文字和图片，再请求一次完整答案；不把推理内容当结果，
         # 也不将用户资料或模型输出写入日志。
         retry_msgs = msgs + [{"role": "user", "content":
             "上次回答无法解析。请重新完成原任务，只输出一个完整有效的 JSON 对象，"
             "使用双引号，不要输出思考过程、代码块或解释。"}]
-        retry_text = chat(retry_msgs, max_tokens=max_tokens, temperature=0.0)
+        retry_options = dict(call_options)
+        retry_options["temperature"] = 0.0
+        retry_text = chat(retry_msgs, **retry_options)
         try:
-            return _parse_json(retry_text)
+            return parse_and_check(retry_text)
         except ValueError as e:
-            raise AiUnavailable(f"AI 两次输出均不是完整的 JSON 对象，请检查模型输出或重试: {e}") from e
+            raise AiUnavailable(f"AI 两次输出均未通过 JSON 解析或字段检查：{e}。请检查模型是否输出了完整最终答案，或稍后重试。") from e
 
 
 def format_multimodal_message(
@@ -500,242 +586,88 @@ def check_diagnostics(override_cfg: dict | None = None) -> dict:
         }
 
 
-# ==================== 启发式规则提取（AI 停用/故障时的无缝降级兜底） ====================
+def chat_stream(messages: list[dict], max_tokens: int = 1500,
+                temperature: float = 0.3) -> Iterator[str]:
+    """流式 chat：逐个产出 OpenAI 兼容 SSE 的增量文本；失败抛 AiUnavailable。
 
-_NOTICE_KEYWORDS = ("通知", "截止", "报名", "提交", "申请", "缴费", "申报", "答辩", "会议", "提醒", "安排", "选课", "ddl", "deadline")
-
-
-def heuristic_detect_mode(text: str, user_note: str = "") -> str:
-    """根据关键词推断模式是 notice 还是 later。"""
-    combined = f"{text} {user_note}".lower()
-    for kw in _NOTICE_KEYWORDS:
-        if kw in combined:
-            return "notice"
-    return "later"
-
-
-def heuristic_extract_date(text: str) -> tuple[str, str]:
-    """从文本中结合上下文语境智能提取截止日期与时间，严格区分截止日期与发布日期。
-    返回 (YYYY-MM-DD, HH:MM)。若无明确截止时间则返回 ("", "")。
+    与 chat 共用同一套配置与错误语义；服务端不支持 stream 时，回退解析完整 JSON。
     """
-    now = datetime.now()
-    cur_year = now.year
+    if not is_enabled():
+        cfg = _cfg()
+        raise AiUnavailable(f"AI 服务未启用。请检查配置或开启 SSH 隧道: {cfg['tunnel_hint']}")
+    cfg = _cfg()
+    endpoint = normalize_endpoint(cfg.get("endpoint") or "")
+    body = json.dumps({
+        "model": cfg["model"],
+        "messages": messages,
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+        "stream": True,
+    }).encode("utf-8")
+    headers = {"Content-Type": "application/json", "Accept": "text/event-stream",
+               "Accept-Encoding": "identity"}
+    if cfg.get("api_key") and cfg["api_key"] != "unused":
+        headers["Authorization"] = f"Bearer {cfg['api_key']}"
+    req = urllib.request.Request(
+        f"{endpoint}/chat/completions",
+        data=body,
+        headers=headers,
+        method="POST",
+    )
+    try:
+        resp = urllib.request.urlopen(req, timeout=cfg["timeout"])
+    except urllib.error.HTTPError as e:
+        err_body = ""
+        try:
+            err_body = e.read().decode("utf-8", errors="ignore")
+        except Exception:
+            pass
+        raise AiUnavailable(f"AI 服务不可用(HTTP {e.code}): {err_body or e.reason}")
+    except (urllib.error.URLError, TimeoutError, OSError) as e:
+        raise AiUnavailable(
+            f"AI 服务连接不可用: 无法连接至 {cfg['endpoint']} ({e})。"
+            f"请确认模型已启动或运行 SSH 隧道: {cfg['tunnel_hint']}"
+        )
 
-    # 截止/延期强特征关键词
-    deadline_keywords = ("截止", "申报截止", "提交截止", "系统截止", "报名截止", "有效至", "逾期",
-                         "前完成", "最晚于", "前提交", "前报送", "前发送", "前寄达", "前上传", "ddl", "deadline",
-                         "延期至", "顺延至", "推迟至", "延长至", "调整为")
-    # 发布/发文排除关键词
-    publish_keywords = ("发布", "印发", "发文", "通知日期", "发布时间", "签发", "发于", "起发布")
+    buffer: list[str] = []
+    emitted = False
+    try:
+        with resp:
+            for raw_line in resp:
+                line = raw_line.decode("utf-8", errors="ignore").strip()
+                if not line:
+                    continue
+                buffer.append(line)
+                if not line.startswith("data:"):
+                    continue
+                data = line[len("data:"):].strip()
+                if data == "[DONE]":
+                    break
+                try:
+                    obj = json.loads(data)
+                except json.JSONDecodeError:
+                    continue
+                choices = obj.get("choices") or []
+                if not choices or not isinstance(choices[0], dict):
+                    continue
+                delta = choices[0].get("delta") or {}
+                piece = delta.get("content")
+                if isinstance(piece, str) and piece:
+                    emitted = True
+                    yield piece
+    except (urllib.error.URLError, TimeoutError, OSError) as e:
+        raise AiUnavailable(f"AI 流式输出中断: {e}")
 
-    # 匹配各类日期表达式
-    date_patterns = [
-        # 1. 2026年11月20日 / 2026-11-20 / 2026/11/20
-        re.compile(r"(\d{4})[-/年\.](\d{1,2})[-/月\.](\d{1,2})(?:日)?(?:\s*(\d{1,2})[:点时](\d{2}))?"),
-        # 2. 11月20日 / 11-20
-        re.compile(r"(?<!\d)(\d{1,2})[-/月\.](\d{1,2})(?:日)?(?:\s*(\d{1,2})[:点时](\d{2}))?"),
-    ]
-
-    candidates: list[dict] = []
-
-    for pat in date_patterns:
-        for match in pat.finditer(text):
-            groups = match.groups()
-            start, end = match.span()
-            if len(groups) == 5:  # 带年份
-                y = int(groups[0])
-                m = int(groups[1])
-                d = int(groups[2])
-                hh = groups[3]
-                mm = groups[4]
-            else:  # 不带年份
-                y = cur_year
-                m = int(groups[0])
-                d = int(groups[1])
-                hh = groups[2]
-                mm = groups[3]
-
-            try:
-                dt = datetime(y, m, d)
-                date_str = dt.strftime("%Y-%m-%d")
-                time_str = f"{int(hh):02d}:{int(mm):02d}" if hh and mm else ""
-            except ValueError:
-                continue
-
-            # 上下文窗口探测：限定在当前短句内（不跨越逗号、句号、分号或换行），防止前一句的发布修饰污染后一句的截止
-            prefix = re.split(r"[。；！\n，,]", text[:start])[-1].lower()
-            suffix = re.split(r"[。；！\n，,]", text[end:])[0].lower()
-            window = f"{prefix} {suffix}"
-
-            score = 0
-            # 命中截止语境
-            for kw in deadline_keywords:
-                if kw in prefix:
-                    score += 20  # 关键词在日期前面（如“截止时间为 11-20”）权重最高
-                elif kw in suffix:
-                    score += 15  # 关键词在日期后面（如“11-20 前完成系统填报”）
-            # 命中发布语境惩罚（仅在当前分句生效）
-            for pkw in publish_keywords:
-                if pkw in window:
-                    score -= 20
-
-            candidates.append({
-                "date": date_str,
-                "time": time_str,
-                "score": score,
-                "pos": start,
-            })
-
-    if not candidates:
-        return "", ""
-
-    # 按置信度排序，优先选择截止语境分数高的
-    candidates.sort(key=lambda c: (c["score"], c["pos"]), reverse=True)
-    best = candidates[0]
-
-    # 如果最高分的日期依然是严重惩罚的纯发布日期（score < 0），说明文中没有截止期限，坚决不误判为 DDL
-    if best["score"] < 0:
-        return "", ""
-
-    # 如果有明确截止语境候选（score > 0），选用最佳候选
-    if best["score"] > 0:
-        return best["date"], best["time"]
-
-    # 无法通过词语判断时，如果存在多个日期，排除掉首个可能是发文日期的项，取最后一个
-    if len(candidates) > 1:
-        return candidates[-1]["date"], candidates[-1]["time"]
-
-    return best["date"], best["time"]
-
-
-def heuristic_extract_notice(text: str, user_note: str = "") -> dict:
-    """当大模型不可用时，基于启发式规则抽取通知核心事实。"""
-    lines = [line.strip() for line in (text or "").splitlines() if line.strip()]
-    raw_head = lines[0] if lines else "新通知事项"
-    # 清理 markdown 标题符号
-    title = re.sub(r"^[#>*`\-\+\s]+", "", raw_head)[:60].strip() or "未命名通知"
-
-    ddl_date, ddl_time = heuristic_extract_date(f"{user_note} {text}")
-
-    # 提炼要点/注意事项清单
-    highlights: list[str] = []
-    for line in lines[1:10]:
-        clean_l = re.sub(r"^[#>*`\-\+\s]+", "", line).strip()
-        if re.match(r"^(\d+[\.、\)]|[一二三四五六七八九十]+[\.、\)]|注意|务必|要求|材料)", clean_l):
-            if clean_l and len(clean_l) <= 100:
-                highlights.append(clean_l)
-        if len(highlights) >= 4:
-            break
-
-    summary = " ".join(lines[:3])[:200]
-    if user_note:
-        summary = f"[{user_note}] {summary}"
-
-    kw_candidates = [w for w in re.split(r"[\s,，、:：【】\[\]()（）/_\-]+", f"{title} {user_note}") if len(w) >= 2]
-    return {
-        "title": title,
-        "summary": summary,
-        "highlights": highlights,
-        "deadline_date": ddl_date,
-        "deadline_time": ddl_time,
-        "event_keywords": kw_candidates[:6],
-    }
-
-
-def heuristic_extract_later(text: str, source_url: str = "", user_note: str = "") -> dict:
-    """当大模型不可用时，基于启发式规则抽取稍后看卡片。"""
-    lines = [line.strip() for line in (text or "").splitlines() if line.strip()]
-    first_line = lines[0] if lines else ""
-    title = re.sub(r"^[#>*`\-\+\s]+", "", first_line)[:60].strip()
-    if not title:
-        if source_url:
-            title = source_url.split("/")[-1] or source_url
-        else:
-            title = "稍后看卡片"
-
-    # 分类检测
-    combined = f"{text} {source_url} {user_note}".lower()
-    category = "其他"
-    if any(k in combined for k in ("arxiv", "paper", "pdf", "cvpr", "icml", "neurips", "acl", "ieee", "论文")):
-        category = "论文"
-    elif any(k in combined for k in ("github", "repo", "git", "代码", "开源")):
-        category = "项目"
-    elif any(k in combined for k in ("bilibili", "youtube", "b23", "video", "视频")):
-        category = "视频"
-    elif any(k in combined for k in ("tutorial", "guide", "docs", "教程", "手册", "指南")):
-        category = "教程"
-    elif any(k in combined for k in ("tool", "cli", "app", "工具", "软件", "插件")):
-        category = "工具"
-
-    brief = " ".join(lines[:2])[:150] if lines else "暂无简介"
-    why_focus = user_note if user_note else "留存稍后深入研读与查阅"
-    tags = [category] if category != "其他" else ["稍后看"]
-
-    return {
-        "title": title,
-        "brief": brief,
-        "why_focus": why_focus,
-        "category": category,
-        "tags": tags,
-    }
-
-
-def heuristic_reconcile_notice(existing_thread: dict, new_notice: dict) -> dict:
-    """启发式研判前后两封通知的版本演进关系，保障旧通知录入时不回滚最新有效 DDL。"""
-    old_date = existing_thread.get("deadline_date", "")
-    new_date = new_notice.get("deadline_date", "")
-
-    change_type = "update"
-    change_reason = "补充新要求与通知事实"
-    effective_date = old_date
-    effective_time = existing_thread.get("deadline_time", "")
-
-    new_text_combined = f"{new_notice.get('title', '')} {new_notice.get('summary', '')}".lower()
-    is_explicit_postpone = any(w in new_text_combined for w in ("延期", "顺延", "推迟", "延长", "延至", "调整为"))
-    is_explicit_advance = any(w in new_text_combined for w in ("提前", "提前至", "压缩"))
-
-    if new_date and old_date:
-        if new_date > old_date:
-            # 日期更晚，且语境为延期或自然顺延
-            change_type = "postpone"
-            change_reason = f"截止时间由 {old_date} 延期至 {new_date}"
-            effective_date = new_date
-            effective_time = new_notice.get("deadline_time") or effective_time
-        elif new_date < old_date:
-            if is_explicit_advance:
-                change_type = "update"
-                change_reason = f"截止时间提前至 {new_date}"
-                effective_date = new_date
-                effective_time = new_notice.get("deadline_time") or effective_time
-            else:
-                # 关键修复：后导入的旧邮件/早期通知，绝对不能回退已有最新生效截止日！
-                change_type = "update"
-                change_reason = f"录入历史阶段通知（原载截止日 {new_date}），保留当前有效最新截止时间 {old_date}"
-                effective_date = old_date
-        else:
-            change_type = "update"
-            change_reason = "补充同截止期事项的材料或细节要求"
-    elif new_date and not old_date:
-        change_type = "update"
-        change_reason = f"明确截止时间为 {new_date}"
-        effective_date = new_date
-        effective_time = new_notice.get("deadline_time") or ""
-    elif old_date and not new_date:
-        effective_date = old_date
-
-    # 检测是否有取消关键词
-    if any(k in new_text_combined for k in ("取消", "作废", "终止", "暂停")):
-        change_type = "cancel"
-        change_reason = "通知表明活动或事项已取消/暂停"
-
-    summary = new_notice.get("summary") or existing_thread.get("summary", "")
-    highlights = new_notice.get("highlights") or []
-
-    return {
-        "change_type": change_type,
-        "change_reason": change_reason,
-        "summary": summary,
-        "highlights": highlights,
-        "deadline_date": effective_date,
-        "deadline_time": effective_time,
-    }
+    if emitted:
+        return
+    # 某些兼容服务忽略 stream 参数，直接返回整段 JSON：兜底解析，避免“空回答”。
+    text = "\n".join(buffer)
+    try:
+        data = json.loads(text)
+        content = data["choices"][0]["message"].get("content")
+    except (json.JSONDecodeError, KeyError, IndexError, TypeError):
+        content = None
+    if isinstance(content, str) and content.strip():
+        yield content.strip()
+        return
+    raise AiUnavailable("AI 流式输出为空或格式异常")

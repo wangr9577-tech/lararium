@@ -161,8 +161,8 @@ def test_5_failure_visibility_and_error_msg_preservation():
     assert rec_data["raw_text"] == n_text
 
 
-def test_6_explicit_user_rule_fallback_control():
-    """测试用户显式点击「改用规则降级整理」时，才切换为规则整理并置为 ready，把控制权交还给用户。"""
+def test_6_retry_after_model_recovers():
+    """模型恢复后用 /retry 重新处理；规则降级接口已删除，不再提供静默兜底。"""
     n_text = (
         "【2026年国家重点实验室学术研讨会】\n"
         "定于2026年12月20日09:00在综合楼召开。\n"
@@ -183,14 +183,28 @@ def test_6_explicit_user_rule_fallback_control():
     rec_fail = client.get(f"/api/assistant/records/{rec_id}", headers=auth_headers()).json()
     assert rec_fail["status"] == "failed"
 
-    # 2. 用户在前端显式点击 [改用规则降级整理]
+    # 2. 规则降级接口已移除：不能把控制权交给“假装成功”的规则整理
     fb_resp = client.post(f"/api/assistant/records/{rec_id}/fallback-rule", headers=auth_headers())
-    assert fb_resp.status_code == 200
-    assert fb_resp.json()["ok"] is True
+    assert fb_resp.status_code in (404, 405), "规则降级接口应已删除"
 
-    # 3. 验证：显式降级后状态成功流转为 ready，并提取出截止日期与标题
+    # 3. 模型恢复后显式重试，正常产出卡片与 DDL
+    card = {
+        "title": "2026年国家重点实验室学术研讨会",
+        "summary": "研讨会定于2026年12月20日09:00在综合楼召开，参会报名截止2026-12-10 18:00。",
+        "highlights": ["报名参会"],
+        "deadline_date": "2026-12-10",
+        "deadline_time": "18:00",
+        "event_keywords": ["学术研讨会", "报名"],
+        "quote": "参会报名截止时间：2026-12-10 18:00。",
+        "evidence_quotes": [],
+    }
+    with patch("app.services.llm.is_enabled", return_value=True), \
+         patch("app.services.llm.chat_structured", return_value=card):
+        retry_resp = client.post(f"/api/assistant/records/{rec_id}/retry", headers=auth_headers())
+        assert retry_resp.status_code == 200
+
     rec_ready = client.get(f"/api/assistant/records/{rec_id}", headers=auth_headers()).json()
-    assert rec_ready["status"] == "ready", f"用户显式选择规则降级后状态应为 ready: {rec_ready['status']}"
+    assert rec_ready["status"] == "ready", f"模型恢复后重试应为 ready: {rec_ready['status']}"
     assert "国家重点实验室学术研讨会" in rec_ready["title"]
     assert rec_ready["thread"] is not None
     assert rec_ready["thread"]["deadline_date"] == "2026-12-10"

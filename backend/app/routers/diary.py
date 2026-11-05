@@ -11,6 +11,8 @@
 from __future__ import annotations
 
 import re
+import hashlib
+import threading
 from datetime import datetime
 from pathlib import Path
 
@@ -23,6 +25,12 @@ from ..auth import get_current
 from ..db import db
 
 router = APIRouter(prefix="/api/diary", tags=["diary"])
+DIARY_LOCK = threading.RLock()
+
+
+def diary_version(date: str) -> str:
+    p = _path(date)
+    return hashlib.sha256(p.read_bytes()).hexdigest() if p.is_file() else "missing"
 
 DIARY_DIR = config.DATA_DIR / "diary"
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -47,7 +55,9 @@ def _split(raw: str) -> tuple[dict, str]:
         meta = yaml.safe_load(m.group(1)) or {}
     except yaml.YAMLError:
         meta = {}
-    return meta, m.group(2)
+    body = m.group(2)
+    # _dump inserts one blank separator line after the front matter.
+    return meta, body[1:] if body.startswith("\n") else body
 
 
 def _dump(date: str, meta: dict, content: str) -> None:
@@ -61,6 +71,7 @@ class DiaryIn(BaseModel):
     content: str = Field(default="", max_length=2_000_000)  # 防止误贴大文件写爆盘，超限由 FastAPI 返回 422
     mood: str = Field(default="", max_length=20)
     weather: str = Field(default="", max_length=20)
+    expected_version: str | None = None
 
 
 @router.get("/calendar")
@@ -359,12 +370,13 @@ def get_footprint(date: str = Query(default=""), _user: dict = Depends(get_curre
 def get_diary(date: str, _user: dict = Depends(get_current)):
     if not DATE_RE.match(date):
         raise HTTPException(400, "date 应为 YYYY-MM-DD")
-    p = _path(date)
-    if not p.is_file():
-        return {"date": date, "mood": "", "weather": "", "content": "", "updated": ""}
-    meta, content = _split(vault.read_text(p))
-    return {"date": date, "mood": meta.get("mood", ""), "weather": meta.get("weather", ""),
-            "content": content.rstrip("\n"), "updated": meta.get("updated", "")}
+    with DIARY_LOCK:
+        p = _path(date)
+        if not p.is_file():
+            return {"date": date, "mood": "", "weather": "", "content": "", "updated": "", "version": "missing"}
+        meta, content = _split(vault.read_text(p))
+        return {"date": date, "mood": meta.get("mood", ""), "weather": meta.get("weather", ""),
+                "content": content.rstrip("\n"), "updated": meta.get("updated", ""), "version": diary_version(date)}
 
 
 @router.put("/{date}")
@@ -379,19 +391,20 @@ def put_diary(date: str, body: DiaryIn, _user: dict = Depends(get_current)):
         raise HTTPException(400, f"心情只能是 {[m for m in MOODS if m]}")
     if body.weather not in WEATHERS:
         raise HTTPException(400, f"天气只能是 {[w for w in WEATHERS if w]}")
-    _dump(date, {"mood": body.mood, "weather": body.weather, "updated": _now()}, body.content)
-    meta, content = _split(vault.read_text(_path(date)))
-    return {"date": date, "mood": body.mood, "weather": body.weather,
-            "content": body.content, "updated": meta.get("updated", "")}
+    with DIARY_LOCK:
+        if body.expected_version is not None and body.expected_version != diary_version(date):
+            raise HTTPException(409, "日记已被修改，请重新加载后再保存")
+        _dump(date, {"mood": body.mood, "weather": body.weather, "updated": _now()}, body.content)
+        return get_diary(date, _user)
 
 
 @router.delete("/{date}")
 def delete_diary(date: str, _user: dict = Depends(get_current)):
     if not DATE_RE.match(date):
         raise HTTPException(400, "date 应为 YYYY-MM-DD")
-    p = _path(date)
-    tid = None
-    if p.is_file():
-        # 移入回收站而非物理删（P2-L1）：与笔记/相册/论文一致，误删可恢复
-        tid = trashbin.move_to_trash([p], module="diary", label=f"日记 {date}")
-    return {"ok": True, "trash_id": tid}
+    with DIARY_LOCK:
+        p = _path(date)
+        tid = None
+        if p.is_file():
+            tid = trashbin.move_to_trash([p], module="diary", label=f"日记 {date}")
+        return {"ok": True, "trash_id": tid}

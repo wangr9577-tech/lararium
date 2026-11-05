@@ -37,6 +37,8 @@
         <el-button size="small" type="danger" plain @click="clearDay">清空当天</el-button>
       </div>
     </div>
+    <el-alert v-if="conflicted" title="日记已在别处修改，自动保存已暂停。当前编辑内容仍在此处，请先复制保存，再重新加载最新日记。" type="warning" :closable="false" show-icon />
+    <el-button v-if="conflicted" size="small" @click="reloadAfterConflict">重新加载最新日记</el-button>
     <VditorEditor ref="editorRef" v-model="form.content" @save="() => save(true)" />
 
     <TrashDialog v-model="trashOpen" @restored="onRestored" />
@@ -74,6 +76,8 @@ let dirty = false
 let saveTimer: ReturnType<typeof setTimeout> | undefined
 let saving = false // doSave 串行化：请求进行中再次触发只排一次队
 let queued = false
+const conflicted = ref(false)
+let entryVersion = 'missing'
 let dayHasFile = false // 当天是否已有日记文件（loadEntry 时按 updated 判定，用于空内容保护）
 let formDay = selDate.value // 当前 form 内容所属的日期：初始=选中日，仅 loadEntry 成功后更新；
                             // 恒非空，保证「内容归属日」在任何加载失败态下都不退化为空而串到别的日期
@@ -103,7 +107,9 @@ async function loadCalendar() {
 /** 切换选中日期：供父组件（日程页抽屉/深链）调用 */
 async function setDate(date: string) {
   if (date === selDate.value) return
+  if (conflicted.value) { ElMessage.warning('请先复制当前内容并处理日记冲突，再切换日期'); return }
   await flush()
+  if (conflicted.value || dirty) return
   const [y, m] = date.split('-').map(Number)
   cur.value = new Date(y, m - 1, 1) // 导航定位到该月
   selDate.value = date
@@ -125,7 +131,9 @@ async function loadEntry() {
   loadingEntry = true
   suppressContentWatch = true
   try {
-    const r = await http.get<{ mood: string; weather: string; content: string; updated: string }>(`/diary/${target}`)
+    const r = await http.get<{ mood: string; weather: string; content: string; updated: string; version: string }>(`/diary/${target}`)
+    entryVersion = r.version
+    conflicted.value = false
     form.mood = r.mood
     form.weather = r.weather
     form.content = r.content
@@ -149,6 +157,7 @@ async function loadEntry() {
 
 async function save(manual: boolean) {
   if (loadingEntry) return
+  if (conflicted.value) { dirty = true; return }
   dirty = true // 先置脏：flush/页面卸载才认得出还有待落盘改动
   if (manual) {
     clearTimeout(saveTimer)
@@ -162,6 +171,7 @@ async function save(manual: boolean) {
 }
 
 async function doSave() {
+  if (conflicted.value) return
   if (saving) { queued = true; return }
   // 空内容保护：正文/心情/天气全空且当天本来没写过 → 不落盘，避免凭空建空日记
   // 判据用 dayHasFile（当天是否已有文件），不能用 monthDays（那是"导航所在月"的数据，
@@ -174,12 +184,14 @@ async function doSave() {
   saving = true
   dirty = true
   const day = formDay || selDate.value // 内容归属日：form 仍是上一天正文时（如新日期加载失败）写回上一天，而不是污染新日期
-  const payload = { ...form } // 正文快照：请求期间继续输入不会改变本次写入内容
+  const payload = { ...form, expected_version: entryVersion } // 正文快照：请求期间继续输入不会改变本次写入内容
   try {
-    const r = await http.put<{ updated: string }>(`/diary/${day}`, payload)
+    const r = await http.put<{ updated: string; version: string }>(`/diary/${day}`, payload)
+    if (conflicted.value) return
+    entryVersion = r.version
     saveOk.value = true
     saveHint.value = `已保存 ${r.updated.slice(11, 16)}`
-    dirty = false
+    dirty = form.content !== payload.content || form.mood !== payload.mood || form.weather !== payload.weather
     dayHasFile = true
     if (!monthDays.value.includes(day)) {
       monthDays.value.push(day)
@@ -188,6 +200,7 @@ async function doSave() {
     emit('changed')
   } catch (e: any) {
     saveOk.value = false
+    if (e?.response?.status === 409) { conflicted.value = true; clearTimeout(saveTimer); saveHint.value = '日记冲突，自动保存已暂停'; ElMessage.warning('日记已在别处修改，当前编辑内容已保留，请先复制后重新加载'); return }
     saveHint.value = '保存失败，请检查网络后重试'
     if (e?.response?.status !== 401 && e?.response?.status !== 423) {
       ElMessage.error(e?.response?.data?.detail || '保存失败')
@@ -197,7 +210,7 @@ async function doSave() {
     // P1：切日期时 loadEntry 会在途（loadingEntry=true），此刻 form 仍是上一天的正文，
     // 补跑会把上一天正文写进新日期文件 → 只在没有加载在途时补跑。
     // 该窗口内更晚的输入与"已切到新日期"语义冲突，丢弃比污染安全；在途那一轮的内容已由本次 PUT 落盘。
-    if (queued) { queued = false; if (!loadingEntry) void doSave() }
+    if (queued) { queued = false; if (!loadingEntry && !conflicted.value) void doSave() }
   }
 }
 
@@ -209,6 +222,7 @@ async function flush() {
 }
 
 async function clearDay() {
+  if (conflicted.value) { ElMessage.warning('请先处理日记冲突'); return }
   if (!form.content && !form.mood && !form.weather) return
   try {
     await ElMessageBox.confirm('清空这一天的日记内容？', '确认', { type: 'warning' })
@@ -220,6 +234,7 @@ async function clearDay() {
     suppressContentWatch = true
     dirty = false
     dayHasFile = false
+    entryVersion = 'missing'
     form.content = ''
     form.mood = ''
     form.weather = ''
@@ -316,17 +331,30 @@ watch(() => props.initialDate, (v) => {
 // 把当天未落盘的日记尽力补发一次（浏览器允许 ≤64KB 同步排队）。
 function onPageHide() {
   clearTimeout(saveTimer)
-  if (!dirty || loadingEntry) return
+  if (!dirty || loadingEntry || conflicted.value) return
   const day = formDay || selDate.value // 与 doSave 同一口径：补存写回内容归属日，不能写进当前选中日
   fetch(`/api/diary/${day}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${getToken()}` },
-    body: JSON.stringify({ ...form }),
+    body: JSON.stringify({ ...form, expected_version: entryVersion }),
     keepalive: true,
   }).catch(() => { /* 关页阶段无法再提示 */ })
 }
 
+async function reloadAfterConflict() {
+  try { await ElMessageBox.confirm('重新加载会丢弃当前编辑器中尚未保存的内容。请确认已经复制备份。', '重新加载日记', { type: 'warning', confirmButtonText: '确认重新加载' }) } catch { return }
+  await loadEntry()
+}
+function onAssistantApplied(event: Event) {
+  const day = (event as CustomEvent<{ date: string }>).detail?.date
+  if (day !== formDay) return
+  clearTimeout(saveTimer)
+  if (dirty || saving) { conflicted.value = true; saveOk.value = false; saveHint.value = '日记已更新，自动保存已暂停'; ElMessage.warning('助手已更新日记，编辑器中的内容已保留，请复制后重新加载') }
+  else void loadEntry()
+}
+
 onMounted(() => {
+  window.addEventListener('diary-assistant-applied', onAssistantApplied)
   window.addEventListener('pagehide', onPageHide)
   const [y, m] = selDate.value.split('-').map(Number)
   cur.value = new Date(y, m - 1, 1)
@@ -335,6 +363,7 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  window.removeEventListener('diary-assistant-applied', onAssistantApplied)
   window.removeEventListener('pagehide', onPageHide)
   clearTimeout(saveTimer)
   void flush()

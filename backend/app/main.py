@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import logging
 import os
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
@@ -22,6 +23,8 @@ from .routers import album as album_router
 from .routers import anniversary as anniversary_router
 from .routers import daynote as daynote_router
 from .routers import diary as diary_router
+from .routers import diary_assistant as diary_assistant_router
+from .routers import diary_tools as diary_tools_router
 from .routers import focus as focus_router
 # ---- 项目文档源（外部 md 挂载：浏览/搜索/阅读/编辑，只认 CODE_ROOT 之内的目录）----
 from .routers import fs as fs_router
@@ -83,11 +86,21 @@ except Exception as e:
 
 # P2-L4：生产不公开 OpenAPI 接口结构（摸接口面变小）；KRUSKAL_DEV=1 才开 /docs
 _IS_DEV = os.environ.get("KRUSKAL_DEV") == "1"
+
+@asynccontextmanager
+async def _lifespan(_app):
+    diary_tools_router.start_scheduler()
+    try:
+        yield
+    finally:
+        diary_tools_router.stop_scheduler()
+
 app = FastAPI(
     title="Kruskal", version="0.1.0",
     docs_url="/docs" if _IS_DEV else None,
     redoc_url="/redoc" if _IS_DEV else None,
     openapi_url="/openapi.json" if _IS_DEV else None,
+    lifespan=_lifespan,
 )
 
 # ---- 全局安全网（P1-G2）：/api 一律要求有效 Bearer，白名单除外 ----
@@ -118,7 +131,7 @@ async def auth_and_csp_guard(request: Request, call_next):
 for r in (auth_router.router, settings_router.router, site_router.router,
           translate.router, notes_router.router, focus_router.router,
           schedule_router.router, papers_router.router, vocab_router.router,
-          diary_router.router, holiday_router.router, anniversary_router.router,
+          diary_router.router, diary_assistant_router.router, diary_tools_router.router, holiday_router.router, anniversary_router.router,
           share_router.router, album_router.router, timeline_router.router,
           ledger_router.router, ielts_router.router, ppt_router.router,
           pdf_router.router, trash_router.router,

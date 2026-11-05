@@ -79,6 +79,13 @@ CREATE TABLE IF NOT EXISTS schedule(
     created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_schedule_date ON schedule(date);
+CREATE TABLE IF NOT EXISTS diary_task_requests(
+    user_id INTEGER NOT NULL,
+    request_key TEXT NOT NULL,
+    request_hash TEXT NOT NULL,
+    response_json TEXT NOT NULL,
+    PRIMARY KEY(user_id, request_key)
+);
 CREATE TABLE IF NOT EXISTS vocab(
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     word TEXT NOT NULL,
@@ -320,6 +327,29 @@ CREATE TABLE IF NOT EXISTS assistant_thread_sources (
 );
 CREATE INDEX IF NOT EXISTS idx_asst_ts_thread ON assistant_thread_sources(thread_id, sequence);
 
+CREATE TABLE IF NOT EXISTS assistant_manual_merges (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    target_thread_id INTEGER NOT NULL,
+    source_thread_id INTEGER NOT NULL,
+    record_ids TEXT NOT NULL,
+    schedule_link_ids TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    undone INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS assistant_match_suggestions (
+    thread_id INTEGER NOT NULL,
+    candidate_thread_id INTEGER NOT NULL,
+    reason TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    dismissed INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY(thread_id, candidate_thread_id)
+);
+CREATE TABLE IF NOT EXISTS assistant_separate_sources (
+    record_a INTEGER NOT NULL,
+    record_b INTEGER NOT NULL,
+    PRIMARY KEY(record_a, record_b)
+);
+
 CREATE TABLE IF NOT EXISTS assistant_schedule_links (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     thread_id INTEGER REFERENCES assistant_threads(id) ON DELETE CASCADE,
@@ -449,6 +479,10 @@ def init_db() -> None:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_asst_rec_wb ON assistant_records(wb_item_id)")
         if "input_mode" not in asst_cols:
             conn.execute("ALTER TABLE assistant_records ADD COLUMN input_mode TEXT NOT NULL DEFAULT 'legacy'")
+        link_cols = {r[1] for r in conn.execute("PRAGMA table_info(assistant_schedule_links)")}
+        if "task_id" not in link_cols:
+            conn.execute("ALTER TABLE assistant_schedule_links ADD COLUMN task_id TEXT")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_asst_schedule_task ON assistant_schedule_links(thread_id, task_id)")
     # P2-L5：文件级双保险——数据目录已是 700，库文件与 WAL 附属再收紧为仅属主可读写。
     # 放在 init_db 尾部随每次启动幂等执行（WAL 附属文件重建后的默认权限也会被拧回来）。
     for suffix in ("", "-wal", "-shm"):

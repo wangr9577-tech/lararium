@@ -5,7 +5,7 @@
 2. 场景 2：连续通知演化与唯一 DDL 日程映射（三轮演进、去重单DDL、防歪曲热力图、手动锁定防覆盖）；
 3. 场景 3：与笔记编辑器的草稿连通（草稿结构预填、首存回写 assistant_links、状态流转至 noted）；
 4. 场景 4：Kruskal 上锁机制（Lock Guard & DEK Epoch）防御（上锁中断挂起 paused_locked、解锁无损恢复）；
-5. 场景 5：降级与容错兜底（LLM 未启动/超时抛错时，本地启发式规则稳健兜底）。
+5. 场景 5：模型不可用时如实失败（无规则降级伪装），问答明确标注不可用并回显资料。
 """
 from __future__ import annotations
 
@@ -63,7 +63,7 @@ def test_scenario_1_later_stream_ephemeral_burn():
     验证要点：
     1. 提交长篇论文全文、长摘要、URL 与用户备注；
     2. 生成包含双句简介、关注理由、分类与主题标签的轻量卡片；
-    3. 临时长篇原文即焚：磁盘与数据库中绝对不留存长篇论文全文副本；
+    3. 长篇原文加密保留，供查阅和重新整理；
     4. 系统 papers 论文库未被污染，无新增条目。
     """
     long_paper_content = (
@@ -109,20 +109,19 @@ def test_scenario_1_later_stream_ephemeral_burn():
     assert card["why_focus"] == user_note, "关注理由应正确呈现用户关注点或提炼亮点"
     assert "论文" in card["tags"] or "论文" in rec["tags"], "标签中应包含论文"
 
-    # 2. 验证临时材料即焚策略（磁盘绝对不留存全文）
+    # 2. 原文加密保留，且数据库记录中不存放全文
     rec_dir = asst_mod._record_dir(record_id)
     raw_enc_path = rec_dir / "raw.enc"
-    assert not raw_enc_path.exists(), (
-        f"安全即焚违规！磁盘上仍然留存 raw.enc 全文文件: {raw_enc_path}"
-    )
+    assert asst_mod.vault.read_text(raw_enc_path) == long_paper_content
+    retry = client.post(f"/api/assistant/records/{record_id}/retry", headers=auth_headers())
+    assert retry.status_code == 409
 
     assets_dir = rec_dir / "assets"
     if assets_dir.is_dir():
         asset_files = list(assets_dir.glob("*"))
         assert len(asset_files) == 0, f"临时素材目录未彻底清空: {asset_files}"
 
-    # 验证 API 返回中 raw_text 也是清空的，只返回轻量 card 与来源
-    assert rec["raw_text"] == "", f"详情接口 raw_text 应即焚为空，实际长度: {len(rec['raw_text'])}"
+    assert rec["raw_text"] == long_paper_content
 
     # 验证数据库中 assistant_records 表未留存长文
     with db() as conn:
@@ -441,13 +440,12 @@ def test_scenario_4_lock_guard_and_dek_epoch_defense():
 # ==============================================================================
 
 def test_scenario_5_fallback_and_error_tolerance():
-    """场景 5：降级与容错兜底。
-    
+    """场景 5：模型不可用时如实失败，不做规则降级伪装。
+
     验证要点：
-    1. 模拟大模型服务未启动（is_enabled == False）或连接超时抛出 AiUnavailable；
-    2. 助手通过本地启发式规则兜底提取标题、时间和要点，接口优雅响应不报错；
-    3. 成功创建 DDL 日程项；
-    4. /api/assistant/chat 问答接口在 AI 离线状态下根据已知事实优雅返回，不抛 500。
+    1. 模型连接超时 → 记录 failed、error_msg 可读，原始输入完整保留；
+    2. 规则降级接口已删除（404），不存在“规则整理伪装成功”的路径；
+    3. /api/assistant/chat 在模型离线时明确标注 AI 不可用，只回显检索到的资料，不编造答案。
     """
     notice_text = (
         "【2026年重点研发计划答辩通知】\n"
@@ -475,25 +473,13 @@ def test_scenario_5_fallback_and_error_tolerance():
     rec_failed = client.get(f"/api/assistant/records/{rec_id}", headers=auth_headers()).json()
     assert rec_failed["status"] == "failed", "大模型连接异常时必须如实置为 failed"
     assert "连接超时" in rec_failed.get("error_msg", "")
+    assert rec_failed["raw_text"] == notice_text, "失败时原始输入必须完整保留，便于重试"
 
-    # 2. 模拟用户在界面明确点击「改用规则整理」触发 fallback-rule
-    fallback_resp = client.post(f"/api/assistant/records/{rec_id}/fallback-rule", headers=auth_headers())
-    assert fallback_resp.status_code == 200
+    # 2. 规则降级接口已删除：不允许用规则结果冒充 AI 整理
+    fb_resp = client.post(f"/api/assistant/records/{rec_id}/fallback-rule", headers=auth_headers())
+    assert fb_resp.status_code in (404, 405)
 
-    # 验证降级提取结果
-    rec = client.get(f"/api/assistant/records/{rec_id}", headers=auth_headers()).json()
-    assert rec["status"] == "ready", "通过用户显式启发式降级后状态应顺利转为 ready"
-    assert "2026年重点研发计划答辩通知" in rec["title"]
-    assert rec["thread"]["deadline_date"] == "2026-12-15"
-    assert rec["thread"]["deadline_time"] == "14:30"
-
-    # 验证日程创建
-    with db() as conn:
-        sched = conn.execute("SELECT * FROM schedule WHERE date='2026-12-15' AND type='ddl'").fetchone()
-        assert sched is not None, "启发式降级必须成功提取日期并写入 schedule"
-        assert "重点研发计划答辩" in sched["title"]
-
-    # 验证问答接口在 AI 停用状态下的降级表现
+    # 3. 验证问答接口在 AI 停用状态下的降级表现：明确说明不可用，只回显资料
     with patch("app.services.llm.is_enabled", return_value=False):
         chat_resp = client.post(
             "/api/assistant/chat",
@@ -503,6 +489,7 @@ def test_scenario_5_fallback_and_error_tolerance():
         assert chat_resp.status_code == 200, f"降级问答不应崩溃: {chat_resp.text}"
         chat_data = chat_resp.json()
         assert "answer" in chat_data
+        assert chat_data.get("degraded") is True
         assert "2026年重点研发计划答辩" in chat_data["answer"]
         assert chat_data["sources_used"] >= 1
 
