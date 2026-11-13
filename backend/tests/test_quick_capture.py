@@ -14,7 +14,6 @@ sys.path.insert(0, str(REPO_ROOT / "backend"))
 from starlette.testclient import TestClient
 from backend.tests.test_env import TestEnvironment
 from app import config, db, vault
-from app.auth import bootstrap_admin
 from app.db import init_db
 from app.main import app
 

@@ -32,6 +32,9 @@
           </el-select>
         </el-form-item>
         <el-form-item label="标签（逗号分隔，可空）"><el-input v-model="upTags" placeholder="如：ABM, 社会模拟" /></el-form-item>
+        <el-form-item>
+          <el-checkbox v-model="upTranslate" label="上传后自动翻译成中文（后台排队，打开论文即可中英对照）" />
+        </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="uploadOpen = false">取消</el-button>
@@ -81,6 +84,11 @@
           </el-select>
           <span v-if="p.author">{{ p.author }}</span>
           <el-tag v-for="t in p.tags" :key="t" size="small" effect="plain">{{ t }}</el-tag>
+          <el-tag v-if="p.trans_state === 'ready'" size="small" type="success" effect="plain">已译</el-tag>
+          <el-tag v-else-if="p.trans_state === 'running' || p.trans_state === 'queued'" size="small" type="warning" effect="plain">
+            {{ p.trans_state === 'queued' ? '待译' : '翻译中' }}
+          </el-tag>
+          <el-tag v-else-if="p.trans_state === 'failed'" size="small" type="danger" effect="plain">译文失败</el-tag>
           <span v-if="p.page_count" class="pg">共 {{ p.page_count }} 页</span>
         </div>
         <div v-if="p.note" class="pc-note">{{ p.note }}</div>
@@ -138,7 +146,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Upload } from '@element-plus/icons-vue'
@@ -148,7 +156,7 @@ import TrashDialog from '../components/TrashDialog.vue'
 
 const trashOpen = ref(false)
 
-interface Paper { id: string; title: string; author: string; status: string; tags: string[]; note: string; page_count: number; category: string; subcategory: string; added: string; updated: string }
+interface Paper { id: string; title: string; author: string; status: string; tags: string[]; note: string; page_count: number; category: string; subcategory: string; added: string; updated: string; trans_state?: string }
 type Picked = { raw: File; name: string }
 
 const router = useRouter()
@@ -157,6 +165,7 @@ const uploading = ref(false)
 const upTags = ref('')
 const upCategory = ref('')
 const upSub = ref('')
+const upTranslate = ref(true)
 const papers = ref<Paper[]>([])
 const categories = ref<string[]>([])
 const subcats = ref<Record<string, string[]>>({})
@@ -194,8 +203,11 @@ async function doUpload() {
     if (upTags.value) fd.append('tags', upTags.value)
     if (upCategory.value) fd.append('category', ensureCategory(upCategory.value))
     if (upSub.value && upCategory.value) fd.append('subcategory', ensureSub(upCategory.value, upSub.value))
+    fd.append('auto_translate', upTranslate.value ? '1' : '0')
     const r = await api.post<{ items: Paper[] }>('/papers', fd, { timeout: 120000 })
-    ElMessage.success(`已上传 ${r.items.length} 篇`)
+    const started = r.data.items.some((it) => it.trans_state === 'queued' || it.trans_state === 'running')
+    ElMessage.success(`已上传 ${r.data.items.length} 篇${started ? '，正在后台翻译' : ''}`)
+    if (upTranslate.value && !started) ElMessage.warning('AI 服务未启用，暂未自动翻译（可在论文页手动点「翻译」）')
     uploadOpen.value = false
     pending.value = []; upTags.value = ''; upCategory.value = ''; upSub.value = ''
     load(); loadCategories()
@@ -287,9 +299,21 @@ async function remove(p: Paper) {
 }
 
 async function load() {
-  try { const r = await http.get<{ items: Paper[] }>('/papers'); papers.value = r.items }
-  catch { /* ignore */ }
+  try {
+    const r = await http.get<{ items: Paper[] }>('/papers')
+    papers.value = r.items
+    syncPoll()
+  } catch { /* ignore */ }
 }
+
+// 后台自动翻译时，列表每 6 秒刷新一次状态（有排队/在译的论文才轮询）
+let pollTimer: ReturnType<typeof setInterval> | null = null
+function syncPoll() {
+  const busy = papers.value.some((p) => p.trans_state === 'queued' || p.trans_state === 'running')
+  if (busy && !pollTimer) pollTimer = setInterval(() => load(), 6000)
+  else if (!busy && pollTimer) { clearInterval(pollTimer); pollTimer = null }
+}
+onBeforeUnmount(() => { if (pollTimer) { clearInterval(pollTimer); pollTimer = null } })
 
 onMounted(() => { load(); loadCategories() })
 </script>

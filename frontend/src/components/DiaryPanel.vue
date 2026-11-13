@@ -101,20 +101,27 @@ async function loadCalendar() {
   try {
     const r = await http.get<{ days: string[] }>(`/diary/calendar?month=${curYear.value}-${pad(curMonth.value)}`)
     monthDays.value = r.days
-  } catch { /* 401/423 跳登录 */ }
+  } catch { /* 会话失效由 client 统一处理 */ }
 }
 
 /** 切换选中日期：供父组件（日程页抽屉/深链）调用 */
 async function setDate(date: string) {
-  if (date === selDate.value) return
-  if (conflicted.value) { ElMessage.warning('请先复制当前内容并处理日记冲突，再切换日期'); return }
+  if (date === selDate.value) return true
+  if (conflicted.value) { ElMessage.warning('请先复制当前内容并处理日记冲突，再切换日期'); return false }
   await flush()
-  if (conflicted.value || dirty) return
+  if (conflicted.value || dirty) return false
+  const previousDate = selDate.value
   const [y, m] = date.split('-').map(Number)
   cur.value = new Date(y, m - 1, 1) // 导航定位到该月
   selDate.value = date
+  if (!await loadEntry()) {
+    selDate.value = previousDate
+    const [oldY, oldM] = previousDate.split('-').map(Number)
+    cur.value = new Date(oldY, oldM - 1, 1)
+    return false
+  }
   emit('date-change', date)
-  await loadEntry()
+  return true
 }
 
 async function pickDate(date: string) {
@@ -141,12 +148,14 @@ async function loadEntry() {
     dayHasFile = !!r.updated
     formDay = target // form 内容归属日：仅加载成功后置位，写盘时按它落盘
     saveHint.value = r.updated ? `已保存于 ${r.updated.slice(11, 16)}` : '空'
+    return true
   } catch (e: any) {
     // 加载失败不改动 form，也就不改动 dayHasFile/formDay：两者描述的是「form 内容所属那一天的文件状态」，
     // 若在此置 false 会造成归属错配（失败态下清空旧日正文会被空内容保护误拦，即 P-e）
     if (e?.response?.status !== 401 && e?.response?.status !== 423) {
       ElMessage.error(e?.response?.data?.detail || '读取失败')
     }
+    return false
   } finally {
     loadingEntry = false
     // watcher 回调在微任务里执行：nextTick 后再放开抑制，避免"加载即误存"
@@ -345,16 +354,7 @@ async function reloadAfterConflict() {
   try { await ElMessageBox.confirm('重新加载会丢弃当前编辑器中尚未保存的内容。请确认已经复制备份。', '重新加载日记', { type: 'warning', confirmButtonText: '确认重新加载' }) } catch { return }
   await loadEntry()
 }
-function onAssistantApplied(event: Event) {
-  const day = (event as CustomEvent<{ date: string }>).detail?.date
-  if (day !== formDay) return
-  clearTimeout(saveTimer)
-  if (dirty || saving) { conflicted.value = true; saveOk.value = false; saveHint.value = '日记已更新，自动保存已暂停'; ElMessage.warning('助手已更新日记，编辑器中的内容已保留，请复制后重新加载') }
-  else void loadEntry()
-}
-
 onMounted(() => {
-  window.addEventListener('diary-assistant-applied', onAssistantApplied)
   window.addEventListener('pagehide', onPageHide)
   const [y, m] = selDate.value.split('-').map(Number)
   cur.value = new Date(y, m - 1, 1)
@@ -363,7 +363,6 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
-  window.removeEventListener('diary-assistant-applied', onAssistantApplied)
   window.removeEventListener('pagehide', onPageHide)
   clearTimeout(saveTimer)
   void flush()

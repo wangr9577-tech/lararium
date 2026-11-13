@@ -67,6 +67,7 @@
 </template>
 
 <script setup lang="ts">
+import { clientState } from '../api/clientState'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
@@ -110,15 +111,15 @@ const prevEl = ref<HTMLDivElement>()
 const rootEl = ref<HTMLDivElement>()
 const preview = ref(false)
 /** 预览布局：side=左右分栏；vertical=上写下看（偏好记忆） */
-const mode = ref<'side' | 'vertical'>((localStorage.getItem('krs_md_mode') as 'side' | 'vertical' | null) || 'side')
+const mode = ref<'side' | 'vertical'>((clientState.getItem('krs_md_mode') as 'side' | 'vertical' | null) || 'side')
 /** 左右分栏时右栏跟随左栏滚动（默认关，点「跟随」开启后记忆） */
-const follow = ref(localStorage.getItem('krs_md_follow') === '1')
+const follow = ref(clientState.getItem('krs_md_follow') === '1')
 let view: EditorView | null = null
 let local = false
 let rafId = 0
 
-watch(mode, (m) => localStorage.setItem('krs_md_mode', m))
-watch(follow, (f) => localStorage.setItem('krs_md_follow', f ? '1' : '0'))
+watch(mode, (m) => clientState.setItem('krs_md_mode', m))
+watch(follow, (f) => clientState.setItem('krs_md_follow', f ? '1' : '0'))
 
 /* 编辑区滚动 → 预览区按比例跟随（仅左右分栏且开启跟随时） */
 function onEditScroll() {

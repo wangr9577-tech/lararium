@@ -10,7 +10,6 @@ import shutil
 import sys
 import tempfile
 from pathlib import Path
-from typing import Any
 
 # 确保 kruskal 的 backend 目录排在 sys.path 首位，防止全局 editable 安装的同名 app 包造成命名空间污染
 _BACKEND_DIR = Path(__file__).resolve().parent.parent
@@ -29,7 +28,7 @@ os.environ.setdefault("KRUSKAL_CSP", "0")
 from starlette.testclient import TestClient
 
 from app import auth as authz
-from app import config, db, vault
+from app import config, crypto, db, vault
 from app.db import init_db
 from app.main import app
 
@@ -43,10 +42,9 @@ class TestEnvironment:
         self.data_dir = Path(self.tmp_dir) / "data"
         self.client = TestClient(app)
         self.token: str = ""
-        self.admin_pw: str = ""
 
     def setup(self) -> None:
-        """初始化测试数据库、管理凭据及 DEK。"""
+        """初始化测试数据库、本机用户、数据密钥与会话 token。"""
         os.environ["KRUSKAL_DATA_DIR"] = str(self.data_dir)
         os.environ["KRUSKAL_DEV"] = "1"
         os.environ["KRUSKAL_CSP"] = "0"
@@ -55,27 +53,10 @@ class TestEnvironment:
         vault.clear_dek()
         config.rebind_data_dir(self.data_dir)
         init_db()
-        authz.bootstrap_admin()
-
-        if config.INIT_PW_FILE.is_file():
-            raw_b = config.INIT_PW_FILE.read_bytes()
-            try:
-                content = raw_b.decode("utf-8")
-            except UnicodeDecodeError:
-                content = raw_b.decode("gbk", errors="ignore")
-            for line in content.splitlines():
-                if "密码:" in line:
-                    self.admin_pw = line.split("密码:", 1)[1].strip()
-                    break
-
-        assert self.admin_pw, f"未能从 {config.INIT_PW_FILE} 获取初始管理密码"
-        resp = self.client.post(
-            "/api/auth/login",
-            json={"username": config.ADMIN_USERNAME, "password": self.admin_pw},
-        )
-        assert resp.status_code == 200, f"测试登录失败: {resp.text}"
-        self.token = resp.json()["token"]
-        assert vault.has_dek(), "登录后 DEK 应已就绪"
+        user = authz.ensure_local_user()
+        vault.set_dek(crypto.new_dek())
+        self.token = authz.issue_token(user["id"])
+        assert vault.has_dek(), "测试环境初始化后 DEK 应已就绪"
 
     def auth_headers(self) -> dict[str, str]:
         return {"Authorization": f"Bearer {self.token}"}

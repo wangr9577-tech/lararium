@@ -1,12 +1,12 @@
 <template>
-  <div class="page" v-loading="loading">
+  <div class="page" :class="{ immersive: editing && immersive }" v-loading="loading">
     <!-- 顶部阅读进度条：随滚动填充 -->
     <div class="read-progress" :style="{ width: progress + '%' }" />
     <div v-if="note" class="view">
       <div class="head">
         <div>
           <div class="page-title">{{ note.title }}</div>
-          <div class="meta">
+          <div v-if="!isInk && !(editing && fmtDraft === 'ink')" class="meta">
             <span class="chip">{{ typeLabel(note.type) }}</span>
             <span v-if="note.ppt" class="chip ppt">PPT</span>
             <span v-if="note.pdf" class="chip pdf">PDF</span>
@@ -15,26 +15,49 @@
           </div>
         </div>
         <div class="ops">
-          <el-button :title="backTitle" @click="router.push(backTarget)">{{ backLabel }}</el-button>
-          <template v-if="isInk">
-            <el-button type="success" plain @click="exportPng">
-              <el-icon style="margin-right:4px"><Download /></el-icon>导出 PNG
+          <el-button :title="backTitle" @click="goBack">{{ backLabel }}</el-button>
+          <template v-if="!editing">
+            <template v-if="isInk">
+              <el-button type="success" plain @click="exportPng">
+                <el-icon style="margin-right:4px"><Download /></el-icon>导出 PNG
+              </el-button>
+            </template>
+            <template v-else>
+              <ShareDialog target="note" :ref="note.id" button-text="分享" type="success" plain />
+              <el-button type="primary" plain :loading="pdfLoading" @click="exportPdf">
+                <el-icon style="margin-right:4px"><Download /></el-icon>导出 PDF
+              </el-button>
+            </template>
+            <el-button type="primary" @click="startEdit">
+              <el-icon style="margin-right:4px"><EditPen /></el-icon>编辑
             </el-button>
+            <el-button type="danger" plain @click="remove">删除</el-button>
           </template>
           <template v-else>
-            <ShareDialog target="note" :ref="note.id" button-text="分享" type="success" plain />
-            <el-button type="primary" plain :loading="pdfLoading" @click="exportPdf">
-              <el-icon style="margin-right:4px"><Download /></el-icon>导出 PDF
+            <el-button v-if="fmtDraft === 'ink'" text class="fs-btn" :title="immersive ? '退出全屏' : '全屏书写（隐藏顶栏底栏，纸面吃满屏幕）'" @click="toggleImmersive">
+              <el-icon style="margin-right:4px"><FullScreen /></el-icon>{{ immersive ? '退出全屏' : '全屏' }}
             </el-button>
+            <el-button v-if="fmtDraft === 'ink'" @click="exportPngEdit">导出 PNG</el-button>
+            <el-button v-if="fmtDraft !== 'ink'" @click="cancelEdit">取消</el-button>
+            <el-button type="primary" :loading="saving" @click="fmtDraft === 'ink' ? saveEdit(false) : finishEdit()">
+              <el-icon style="margin-right:4px"><Check /></el-icon>{{ fmtDraft === 'ink' ? '保存' : '保存并退出' }}
+            </el-button>
+            <el-button v-if="fmtDraft === 'ink'" type="danger" plain @click="remove">删除</el-button>
           </template>
-          <el-button type="primary" @click="$router.push(`/notes/${note.id}/edit`)">
-            <el-icon style="margin-right:4px"><EditPen /></el-icon>编辑
-          </el-button>
-          <el-button type="danger" plain @click="remove">删除</el-button>
         </div>
       </div>
-      <!-- 目录（仅 Markdown 笔记、且标题多于 1 个时显示） -->
-      <nav v-if="!isInk && toc.length > 1" class="toc glass">
+      <!-- 编辑模式：原地编辑（不跳页），正文形式可切换 -->
+      <div v-if="editing" class="edit-bar" :class="{ 'ink-edit-bar': fmtDraft === 'ink' }">
+        <div class="fmt-seg" title="正文形式：文本（Markdown）与白板手写二选一">
+          <button :class="{ on: fmtDraft === 'md' }" @click="pickFmt('md')">文本</button>
+          <button :class="{ on: fmtDraft === 'ink' }" @click="pickFmt('ink')">白板手写</button>
+        </div>
+        <span v-if="fmtDraft !== 'ink'" class="save-hint" title="每 5 分钟自动保存 · Ctrl+S 立即保存">
+          编辑中 · 每 5 分钟自动保存 · 上次 {{ lastSavedAt || '—' }}
+        </span>
+      </div>
+      <!-- 目录（仅 Markdown 笔记、且标题多于 1 个时显示；编辑中隐藏，保存后重建） -->
+      <nav v-if="!editing && !isInk && toc.length > 1" class="toc glass">
         <div class="toc-title">目录</div>
         <a
           v-for="(t, i) in toc"
@@ -45,14 +68,28 @@
           @click.prevent="jumpTo(t.id)"
         >{{ t.text }}</a>
       </nav>
-      <article class="article glass">
-        <div v-if="note.summary" class="lead">{{ note.summary }}</div>
-        <WhiteboardCanvas v-if="isInk" ref="wbRef" :model-value="note.content" readonly />
-        <div v-else ref="articleEl" class="markdown-body" v-html="html" @click="onArticleClick" />
+      <article class="article glass" :class="{ editing }">
+        <div v-if="note.summary && !editing" class="lead">{{ note.summary }}</div>
+        <template v-if="editing">
+          <!-- 原地编辑：白板 or Vditor 即时渲染（Typora 式，边打边出效果） -->
+          <WhiteboardCanvas v-if="fmtDraft === 'ink'" ref="wbEditRef" v-model="draft" />
+          <template v-else>
+            <div class="md-toolbar">
+              <el-button size="small" text @click="refOpen = true">
+                <el-icon style="margin-right:4px"><Connection /></el-icon>引用文章
+              </el-button>
+            </div>
+            <VditorEditor ref="vdRef" v-model="draft" :min-height="560" :auto-focus="true" @save="save()" />
+          </template>
+        </template>
+        <template v-else>
+          <WhiteboardCanvas v-if="isInk" ref="wbRef" :model-value="note.content" readonly />
+          <div v-else ref="articleEl" class="markdown-body" v-html="html" @click="onArticleClick" @dblclick="onArticleDblClick" />
+        </template>
       </article>
 
-      <!-- 子页面（顶层笔记可挂子页，像雅思模块的「我的子页」） -->
-      <div v-if="!note.parent" class="subpanel glass">
+      <!-- 子页面（顶层笔记可挂子页，像雅思模块的「我的子页」；编辑中隐藏） -->
+      <div v-if="!note.parent && (!editing || fmtDraft === 'ink')" class="subpanel glass">
         <div class="sp-head">
           <span class="sp-title">子页面</span>
           <span class="sp-count">{{ subs.length }}</span>
@@ -74,7 +111,7 @@
       </div>
 
       <!-- 上一篇 / 下一篇（按列表顺序：顶层=更新时间倒序；子页=同一父页的子页顺序） -->
-      <div v-if="prevNote || nextNote" class="pn">
+      <div v-if="(prevNote || nextNote) && (!editing || fmtDraft === 'ink')" class="pn">
         <button type="button" class="pn-item" :class="{ off: !prevNote }" :disabled="!prevNote"
           @click="prevNote && goNote(prevNote.id)">
           <span class="pn-k">← 上一篇</span>
@@ -91,8 +128,27 @@
     </div>
     <div v-else-if="!loading" class="miss">笔记不存在或已被删除</div>
 
+    <!-- 引用其它文章：选一篇，在光标处插入站内链接 [标题](/notes/id)（有选中文字则包裹为链接文字） -->
+    <el-dialog v-model="refOpen" title="引用其它文章" width="560px" @open="onRefOpen">
+      <div class="mde-rf-tip">选择一篇文章，将在光标处插入站内引用链接（或包裹当前选中文字），阅读时点击即可跳转</div>
+      <el-input v-model="refQ" placeholder="搜索标题 / 摘要 / 标签…" clearable>
+        <template #prefix><el-icon><Search /></el-icon></template>
+      </el-input>
+      <div class="mde-rf-list">
+        <button v-for="n in refList" :key="n.id" type="button" class="mde-rf-item" @click="pickRef(n)">
+          <span class="mde-rf-type">{{ typeLabel(n.type) }}</span>
+          <span class="mde-rf-title">{{ n.title }}</span>
+          <span v-if="n.summary" class="mde-rf-sum">{{ n.summary }}</span>
+        </button>
+        <div v-if="!refList.length" class="mde-rf-empty">没有可引用的文章（已排除当前这篇）</div>
+      </div>
+      <template #footer>
+        <el-button @click="refOpen = false">取消</el-button>
+      </template>
+    </el-dialog>
+
     <!-- 回到顶部：滚动超过 400px 出现 -->
-    <button v-if="showTop" class="to-top" title="回到顶部" @click="toTop">
+    <button v-if="showTop && !editing" class="to-top" title="回到顶部" @click="toTop">
       <el-icon><ArrowUp /></el-icon>
     </button>
   </div>
@@ -100,13 +156,14 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { useRoute, useRouter, type LocationQueryRaw, type RouteLocationRaw } from 'vue-router'
+import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter, type LocationQueryRaw, type RouteLocationRaw } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { EditPen, Download, Plus, ArrowUp } from '@element-plus/icons-vue'
-import { http } from '../api/client'
+import { ArrowUp, Check, Connection, Download, EditPen, FullScreen, Plus, Search } from '@element-plus/icons-vue'
+import { getToken, http } from '../api/client'
 import { renderMd } from '../utils/md'
 import { hydrateImages } from '../utils/media'
 import ShareDialog from '../components/ShareDialog.vue'
+import VditorEditor from '../components/VditorEditor.vue'
 import WhiteboardCanvas from '../components/WhiteboardCanvas.vue'
 
 interface Note { id: string; title: string; type: string; fmt?: string; ppt?: string; pdf?: string; folder?: string; parent?: string; tags: string[]; summary: string; created: string; updated: string; content: string }
@@ -298,6 +355,12 @@ function onArticleClick(e: MouseEvent) {
   }
 }
 
+/** 双击正文（非链接）：原地进入编辑，不用先点「编辑」按钮 */
+function onArticleDblClick(e: MouseEvent) {
+  if ((e.target as HTMLElement).closest('a')) return
+  startEdit()
+}
+
 async function exportPdf() {
   if (!note.value) return
   pdfLoading.value = true
@@ -341,20 +404,303 @@ async function remove() {
   try {
     await ElMessageBox.confirm(tip, '删除确认', { type: 'warning' })
   } catch { return }
+  deleting.value = true
+  clearTimeout(inkTimer)
+  // Let an existing PUT finish before deleting, and prevent new saves.
+  if (savePending) await savePending
   try {
     await http.del(`/notes/${note.value!.id}`)
+    editing.value = false
     ElMessage.success('已移入回收站（可在回收站恢复）')
     router.push(backTarget.value) // 删除后回到该笔记原本所在的那一层（同「返回列表」语义）
   } catch (e: any) {
+    deleting.value = false
+    if (editing.value && isDirty()) inkTimer = setTimeout(() => { saveEdit(true) }, 1500)
     ElMessage.error(e?.response?.data?.detail || '删除失败')
   }
 }
 
+/* ---------------- 原地编辑（查看与编辑合一：就在这页改，不跳编辑页） ---------------- */
+
+const AUTO_SAVE_MS = 5 * 60 * 1000 // 编辑中每 5 分钟自动保存
+
+const editing = ref(false)
+const saving = ref(false)
+const deleting = ref(false)
+/** 草稿正文与正文形式：进入编辑时从笔记复制，保存成功才回写 note */
+const draft = ref('')
+const fmtDraft = ref<'md' | 'ink'>('md')
+/** 最近一次成功保存时间（HH:MM:SS），编辑条展示 */
+const lastSavedAt = ref('')
+/** 白板全屏书写 */
+const immersive = ref(false)
+const vdRef = ref<InstanceType<typeof VditorEditor> | null>(null)
+const wbEditRef = ref<InstanceType<typeof WhiteboardCanvas> | null>(null)
+let autoTimer: ReturnType<typeof setInterval> | undefined
+/** 白板「停笔即存」：内容变化后 1.5 秒无新笔迹则自动保存一次 */
+let inkTimer: ReturnType<typeof setTimeout> | undefined
+let savePending: Promise<boolean> | null = null
+
+/** 与服务器归一化一致：标题留空按「未命名」计 */
+function normTitle() {
+  return note.value?.title?.trim() || '未命名'
+}
+
+function isDirty(): boolean {
+  if (!note.value) return false
+  return draft.value !== note.value.content || fmtDraft.value !== (note.value.fmt === 'ink' ? 'ink' : 'md')
+}
+
+/** 保存请求体：标题/类型/目录/挂载/摘要/标签原样带回（本页只改正文与形式） */
+function payloadRaw() {
+  const n = note.value!
+  return {
+    title: normTitle(), type: n.type, fmt: fmtDraft.value,
+    folder: n.folder || '', parent: n.parent || '',
+    summary: n.summary || '', content: draft.value, tags: n.tags || [],
+  }
+}
+
+function startEdit() {
+  const n = note.value
+  if (!n || editing.value) return
+  draft.value = n.content
+  fmtDraft.value = n.fmt === 'ink' ? 'ink' : 'md'
+  lastSavedAt.value = String(n.updated || '').slice(11, 19)
+  editing.value = true
+}
+
+/** 「取消」：放弃未保存改动回到阅读态 */
+async function cancelEdit() {
+  if (!isDirty()) { endEdit(); return }
+  try {
+    await ElMessageBox.confirm('有未保存的修改，放弃并退出编辑吗？', '取消编辑', {
+      confirmButtonText: '放弃修改', cancelButtonText: '继续编辑', type: 'warning',
+    })
+  } catch { return }
+  endEdit()
+}
+
+function endEdit() {
+  immersive.value = false
+  editing.value = false
+  nextTick(() => {
+    fillInternalTitles()
+    buildToc()
+    hydrateImages(articleEl.value) // 回阅读态：站内图片换带鉴权 blob URL
+  })
+}
+
+/** 「保存并退出」；从 /notes/:id/edit 进入的，退出时把 URL 收回阅读地址 */
+async function finishEdit() {
+  if (await saveEdit(false)) {
+    if (fmtDraft.value !== 'ink') endEdit()
+    if (route.path.endsWith('/edit')) {
+      router.replace({ path: `/notes/${note.value!.id}`, query: route.query })
+    }
+  }
+}
+
+/** 保存一次；返回 true=无事/成功，false=失败（路由守卫与 Ctrl+S 复用） */
+async function saveEdit(silent = false): Promise<boolean> {
+  // Wait for the previous snapshot, then save edits made during that request.
+  while (savePending) {
+    if (!(await savePending)) return false
+  }
+  if (deleting.value) return true
+  const n = note.value
+  if (!n || !isDirty()) return true
+  const payload = payloadRaw()
+  saving.value = true
+  const request = (async () => {
+    try {
+      const r = await http.put<{ updated: string }>(`/notes/${n.id}`, payload)
+      n.content = payload.content
+      n.fmt = payload.fmt
+      n.updated = r.updated
+      const s = String(r.updated || '')
+      lastSavedAt.value = s.includes(':') ? s.slice(11, 19) : s
+      return true
+    } catch (e: any) {
+      if (e?.response?.status !== 401 && e?.response?.status !== 423) {
+        ElMessage.error(e?.response?.data?.detail || '保存失败，请稍后重试')
+      }
+      return false
+    }
+  })()
+  savePending = request
+  const ok = await request
+  if (savePending === request) {
+    savePending = null
+    saving.value = false
+  }
+  if (!ok) return false
+  if (isDirty()) return saveEdit(silent)
+  if (!silent) ElMessage.success('已保存')
+  return true
+}
+
+/** 自动保存（每 5 分钟 / 白板停笔 / 离开页面前）：静默；失败返回 false，由调用方决定去留 */
+async function tryAutoSave(): Promise<boolean> {
+  if (!editing.value) return true
+  return saveEdit(true)
+}
+
+/** 浏览器直接关标签/切走：尽力用 keepalive 补一次保存（最坏丢 ≤5 分钟） */
+function onPageHide() {
+  if (!editing.value || deleting.value || saving.value || !isDirty() || !note.value) return
+  const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${getToken()}` }
+  fetch(`/api/notes/${note.value.id}`, { method: 'PUT', headers, body: JSON.stringify(payloadRaw()), keepalive: true }).catch(() => {})
+}
+
+/* 离开阅读页时若在编辑且有改动，先补存一次；保存失败不放行（防丢稿） */
+async function confirmLeaveEdit(): Promise<boolean> {
+  if (deleting.value || !editing.value || (!isDirty() && !savePending)) return true
+  if (await tryAutoSave()) return true
+  try {
+    await ElMessageBox.confirm('自动保存失败，离开可能丢失本次修改。仍要放弃并离开吗？', '保存失败', {
+      confirmButtonText: '放弃并离开', cancelButtonText: '留下重试', type: 'warning',
+    })
+    return true
+  } catch {
+    return false
+  }
+}
+
+onBeforeRouteLeave(confirmLeaveEdit)
+onBeforeRouteUpdate((to, from) => to.params.id !== from.params.id ? confirmLeaveEdit() : true)
+
+/* ---------------- 正文形式：文本 / 白板手写（互斥，切换需确认） ---------------- */
+
+function emptyInkPayload(): string {
+  return JSON.stringify({ v: 1, page: { w: 1000, h: 1414 }, strokes: [] })
+}
+
+function inkHasContent(raw: string): boolean {
+  if (!raw.trim()) return false
+  try {
+    const o = JSON.parse(raw)
+    const pages = Array.isArray(o?.pages) ? o.pages : [o]
+    return pages.some((page: any) =>
+      (Array.isArray(page?.strokes) && page.strokes.length > 0) ||
+      (Array.isArray(page?.images) && page.images.length > 0))
+  } catch {
+    // Unknown nonempty content must not be discarded without confirmation.
+    return true
+  }
+}
+
+async function pickFmt(next: 'md' | 'ink') {
+  if (next === fmtDraft.value) return
+  if (next === 'ink') {
+    // 文本 → 白板：现有文本将被清空（白板存不了 Markdown）
+    if (draft.value.trim()) {
+      try {
+        await ElMessageBox.confirm(
+          '切换为「白板手写」将清空当前文本正文，且不可恢复。确定切换吗？',
+          '切换正文形式', { type: 'warning', confirmButtonText: '切换并清空', cancelButtonText: '取消' })
+      } catch { return }
+    }
+    fmtDraft.value = 'ink'
+    draft.value = emptyInkPayload()
+    ElMessage.success('已切换为白板手写：用触控笔或鼠标在白色纸面上书写')
+  } else {
+    // 白板 → 文本：现有笔迹将被清空
+    if (inkHasContent(draft.value)) {
+      try {
+        await ElMessageBox.confirm(
+          '切换为「文本」将清空当前白板内容，且不可恢复。确定切换吗？',
+          '切换正文形式', { type: 'warning', confirmButtonText: '切换并清空', cancelButtonText: '取消' })
+      } catch { return }
+    }
+    draft.value = ''
+    fmtDraft.value = 'md'
+    ElMessage.success('已切换为文本笔记')
+  }
+}
+
+/** 白板编辑画布导出 PNG */
+function exportPngEdit() {
+  const png = wbEditRef.value?.renderPng()
+  if (!png) return ElMessage.warning('画布尚未就绪')
+  const a = document.createElement('a')
+  a.href = png
+  a.download = `${normTitle().replace(/[\\/:*?"<>|]/g, '_') || note.value?.id}.png`
+  a.click()
+  ElMessage.success('已导出 PNG 图片')
+}
+
+async function toggleImmersive() {
+  immersive.value = !immersive.value
+  try {
+    if (immersive.value && !document.fullscreenElement) await document.documentElement.requestFullscreen()
+    else if (!immersive.value && document.fullscreenElement) await document.exitFullscreen()
+  } catch { /* 浏览器拒绝全屏时仅使用紧凑布局 */ }
+}
+
+function onFsChange() {
+  if (!document.fullscreenElement) immersive.value = false
+}
+
+/* ---------------- 引用其它文章（站内链接 [标题](/notes/id)，光标处插入） ---------------- */
+
+interface RefNote { id: string; title: string; type: string; summary: string; tags: string[] }
+
+const refOpen = ref(false)
+const refQ = ref('')
+const refCandidates = ref<RefNote[]>([])
+
+const refList = computed(() => {
+  const q = refQ.value.trim().toLowerCase()
+  return refCandidates.value.filter((n) => {
+    if (note.value && n.id === note.value.id) return false // 不引用自己
+    if (!q) return true
+    return `${n.title} ${n.summary} ${n.tags.join(' ')}`.toLowerCase().includes(q)
+  })
+})
+
+/** 打开引用面板时按需加载文章列表（默认列表：普通博客/笔记，不含雅思子页） */
+async function onRefOpen() {
+  if (refCandidates.value.length) return
+  try {
+    const r = await http.get<{ items: RefNote[] }>('/notes?module=')
+    refCandidates.value = r.items || []
+  } catch { /* 401/423 忽略 */ }
+}
+
+/** 选中文章：光标处插入 [文字](/notes/id)；有选中文字则用选中文字（insertMD 会先删除选中） */
+function pickRef(n: RefNote) {
+  if (!vdRef.value) return
+  const sel = (vdRef.value.getSelectionText() || '').trim()
+  // 链接文字防破坏 Markdown 语法：去掉方括号/圆括号
+  const text = sel.replace(/[[\]()]/g, '') || n.title || '文章'
+  vdRef.value.insertMD(`[${text}](/notes/${n.id})`)
+  refOpen.value = false
+}
+
+/* ---------------- 编辑态联动 ---------------- */
+
+watch(draft, () => {
+  if (editing.value && fmtDraft.value === 'ink') {
+    clearTimeout(inkTimer)
+    inkTimer = setTimeout(() => { if (editing.value) saveEdit(true) }, 1500)
+  }
+})
+
+/** 返回列表/上级：编辑中的未存改动由路由守卫兜底补存 */
+function goBack() {
+  router.push(backTarget.value)
+}
+
 async function load() {
+  deleting.value = false
   loading.value = true
+  editing.value = false
+  immersive.value = false
   try {
     const r = await http.get<Note>(`/notes/${route.params.id}`)
     note.value = r
+    if (r.fmt === 'ink') startEdit()
     document.title = `${r.title} · 阅读`
     await nextTick()
     fillInternalTitles()
@@ -369,23 +715,47 @@ async function load() {
     }
   } finally {
     loading.value = false
+    // 带着「进编辑态」诉求换的篇（如 /notes/1/edit → /notes/2/edit）：装载完成后落进编辑
+    if (wantEdit && route.path.endsWith('/edit') && note.value) {
+      wantEdit = false
+      startEdit()
+    }
   }
 }
 
 // 阅读页内互相跳转（SPA）时按路由参数重载文章
 watch(() => route.params.id, load)
 
+// 旧链接 /notes/:id/edit：同一组件下直接落进编辑态；收回 /notes/:id 则退出编辑
+let wantEdit = false
+watch(() => route.fullPath, () => {
+  if (route.path.endsWith('/edit')) {
+    if (String(route.params.id || '') === note.value?.id) startEdit()
+    else wantEdit = true // 换篇 + 进编辑：由 load() 收尾
+  } else if (editing.value && fmtDraft.value !== 'ink' && String(route.params.id || '') === note.value?.id && !isDirty()) {
+    endEdit()
+  }
+})
+
 // 正文变化（如换篇笔记、内容重渲染）后重建目录
 watch(html, async () => { await nextTick(); buildToc() })
 
-onMounted(() => {
+onMounted(async () => {
   loadTitleMap() // 静默，不阻塞正文
-  load()
+  await load()
+  if (route.path.endsWith('/edit')) startEdit() // 旧「编辑页」链接：直接进编辑态
   attachScroll() // 初始绑定（此时 articleEl 可能还没渲染，回退 window；load 成功后会重新绑定到 .content）
+  window.addEventListener('pagehide', onPageHide)
+  document.addEventListener('fullscreenchange', onFsChange)
+  autoTimer = setInterval(() => { if (editing.value) saveEdit(true) }, AUTO_SAVE_MS)
 })
 
 onBeforeUnmount(() => {
   detachScroll()
+  clearInterval(autoTimer)
+  clearTimeout(inkTimer)
+  window.removeEventListener('pagehide', onPageHide)
+  document.removeEventListener('fullscreenchange', onFsChange)
 })
 </script>
 
@@ -405,10 +775,40 @@ onBeforeUnmount(() => {
   background: linear-gradient(135deg, rgba(59, 130, 246, 0.18), rgba(99, 102, 241, 0.14));
   color: #2563eb; border: 1px solid rgba(59, 130, 246, 0.45); font-weight: 700;
 }
-.ops { display: flex; gap: 8px; }
+.ops { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.fs-btn { flex: none; }
 .article { padding: 34px 44px; }
 /* 白板类笔记（PPT/PDF/手写）：收窄内边距，把宽度让给纸面 */
-.article:has(> .wb) { padding: 18px 18px 22px; }
+.article:has(> .wb) { padding: 4px; }
+/* 编辑态的白板撑满视口剩余高度 */
+.article .wb:not(.readonly) { height: calc(100vh - 150px); min-height: 420px; }
+
+/* ---------- 原地编辑 ---------- */
+/* 全屏书写：隐藏顶栏等干扰，纸面吃满屏幕 */
+.page.immersive { max-width: none; padding: 6px 10px 8px; }
+.page.immersive .head,
+.page.immersive .read-progress { display: none; }
+.page.immersive .article { padding: 0; }
+.page.immersive .article .wb { height: calc(100vh - 14px); }
+.view:has(.article > .wb) .head { align-items: center; margin-bottom: 6px; }
+.edit-bar { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
+.edit-bar.ink-edit-bar { margin-bottom: 4px; }
+.save-hint { color: var(--txt2); font-size: 12px; white-space: nowrap; }
+.fmt-seg {
+  flex: none; display: inline-flex; gap: 2px; padding: 2px;
+  border-radius: 10px; background: rgba(148, 163, 184, 0.14);
+}
+.fmt-seg button {
+  border: none; cursor: pointer; font-family: inherit; font-size: 12.5px;
+  padding: 4px 11px; border-radius: 8px; color: var(--txt3, #94a3b8);
+  background: transparent;
+}
+html.theme-dark .fmt-seg button { color: #cbd5e1; }
+.fmt-seg button.on { background: var(--acc-grad, linear-gradient(135deg, #8b5cf6, #6366f1)); color: #fff; font-weight: 600; }
+/* 文本编辑器（Vditor 即时渲染）上方工具条：引用按钮 + 提示 */
+.md-toolbar { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; flex-wrap: wrap; }
+.md-toolbar-hint { font-size: 11.5px; color: var(--txt3); }
+html.theme-dark .md-toolbar-hint { color: var(--txt2); }
 
 /* ---------- 子页面面板 ---------- */
 .subpanel { margin-top: 20px; padding: 18px 22px; border-radius: 14px; }
@@ -514,4 +914,24 @@ html.theme-dark .article .markdown-body blockquote { color: var(--txt2); }
 .article .markdown-body ul, .article .markdown-body ol { padding-left: 1.7em; margin: 0.6em 0; }
 .article .markdown-body hr { border: none; border-top: 2px dashed rgba(148, 163, 184, 0.4); margin: 1.4em 0; }
 .article .markdown-body .katex-display { overflow-x: auto; overflow-y: hidden; }
+
+/* 引用其它文章：选文章对话框（teleport 到 body，需非 scoped 样式；与 NoteEdit 同款） */
+.mde-rf-tip { color: var(--txt2); font-size: 12px; margin: 2px 0 10px; }
+.mde-rf-list { max-height: 44vh; overflow-y: auto; display: grid; gap: 6px; margin-top: 10px; }
+.mde-rf-item {
+  display: flex; align-items: baseline; gap: 8px; width: 100%; text-align: left;
+  border: 1px solid rgba(148, 163, 184, 0.22); background: transparent; border-radius: 10px;
+  padding: 8px 12px; cursor: pointer; font-family: inherit; color: var(--txt1);
+  transition: border-color .15s, background .15s;
+}
+html.theme-dark .mde-rf-item { color: #cbd5e1; }
+.mde-rf-item:hover { border-color: var(--acc2); background: rgba(139, 92, 246, 0.08); }
+.mde-rf-type {
+  flex: none; font-size: 11px; padding: 1px 7px; border-radius: 999px;
+  background: rgba(167, 139, 250, 0.14); color: var(--acc2);
+}
+.mde-rf-title { font-weight: 600; font-size: 13.5px; flex: none; max-width: 50%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mde-rf-sum { color: var(--txt3); font-size: 12px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+html.theme-dark .mde-rf-sum { color: var(--txt2); }
+.mde-rf-empty { color: var(--txt2); font-size: 13px; text-align: center; padding: 24px 0; }
 </style>

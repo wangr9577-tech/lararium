@@ -55,7 +55,7 @@ def test_1_vault_epoch_mechanism():
     """验证 DEK Epoch 世代号递增机制。"""
     print("\n[TEST 1] 验证 DEK Epoch 世代号机制...")
     ep0 = vault.epoch()
-    assert ep0 > 0, "登录后 epoch 应大于 0"
+    assert ep0 > 0, "初始化后 epoch 应大于 0"
 
     cur_dek = vault.dek()
     vault.set_dek(cur_dek)

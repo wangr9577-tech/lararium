@@ -378,6 +378,7 @@
 </template>
 
 <script setup lang="ts">
+import { clientState } from '../api/clientState'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
@@ -427,7 +428,7 @@ let inboxTimer: any = null
 
 function loadOpenMap() {
   try {
-    const raw = localStorage.getItem(OPEN_STORAGE_KEY)
+    const raw = clientState.getItem(OPEN_STORAGE_KEY)
     if (raw) openMap.value = JSON.parse(raw)
   } catch {
     openMap.value = {}
@@ -436,7 +437,7 @@ function loadOpenMap() {
 
 function saveOpenMap() {
   try {
-    localStorage.setItem(OPEN_STORAGE_KEY, JSON.stringify(openMap.value))
+    clientState.setItem(OPEN_STORAGE_KEY, JSON.stringify(openMap.value))
   } catch { /* ignore */ }
 }
 

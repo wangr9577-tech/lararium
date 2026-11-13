@@ -9,6 +9,7 @@
         <span v-if="pageTotal" class="pg">第 {{ curPage }}/{{ pageTotal }} 页</span>
       </div>
       <div class="pops">
+        <el-button size="small" @click="questionOpen = true">论文问答 / 对比</el-button>
         <el-button size="small" @click="metaOpen = true">编辑信息</el-button>
         <el-button size="small" type="danger" plain @click="removePaper">删除论文</el-button>
       </div>
@@ -19,6 +20,7 @@
       @pages="(n: number) => savePageCount(n)"
       @page="(n: number, t: number) => { curPage = n; pageTotal = t }"
     />
+    <PaperQuestion v-if="paper" v-model="questionOpen" :paper-id="paper.id" />
 
     <el-dialog v-model="metaOpen" title="论文信息" width="460px">
       <el-form label-position="top" v-if="paper">
@@ -67,6 +69,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { ArrowLeft } from '@element-plus/icons-vue'
 import { http } from '../api/client'
 import PaperReader from '../components/PaperReader.vue'
+import PaperQuestion from '../components/PaperQuestion.vue'
 
 interface Paper { id: string; title: string; author: string; status: string; tags: string[]; note: string; page_count: number; category: string; subcategory: string; link: string }
 
@@ -77,6 +80,7 @@ const paper = ref<Paper | null>(null)
 const curPage = ref(1)
 const pageTotal = ref(0)
 const metaOpen = ref(false)
+const questionOpen = ref(false)
 const metaSaving = ref(false)
 const ed = reactive({
   title: '', author: '', status: '想读', tags: '', note: '', category: '', subcategory: '', link: '',
@@ -181,7 +185,7 @@ onMounted(async () => {
 </script>
 
 <style scoped>
-.pw { max-width: 1200px; }
+.pw { max-width: 1680px; }   /* 中英对照两栏时给足宽度；窄屏仍受视口限制 */
 .phead { display: flex; align-items: center; gap: 12px; padding: 10px 16px; margin-bottom: 12px; flex-wrap: wrap; }
 .ptitle { font-weight: 700; font-size: 15px; }
 .pmeta { display: flex; align-items: center; gap: 6px; margin-left: auto; }

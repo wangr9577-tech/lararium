@@ -1,9 +1,9 @@
-# 迁移到新服务器（10 分钟级）
+# 迁移到另一台电脑（10 分钟级）
 > 设计原则：配置无绝对路径硬编码（环境变量覆盖）；数据 = backend/data 一个目录；前端为静态产物。
 
 ## 步骤
 
-1. **新服务器装基础环境**
+1. **新机器装基础环境**
    ```bash
    conda create -y -n site python=3.11 pip
    # 常规安装（跟随 requirements 版本下限）：
@@ -22,7 +22,7 @@
    ./deploy/restore.sh backups/kruskal-data-xxxx.tar.gz.enc
    # 或直接 rsync backend/data（服务停止时才可整目录直拷，否则 site.db-wal 可能撕裂）
    ```
-   > 备份口令与网站主密码相互独立，忘记备份口令 = 备份不可恢复；建议与备份分处两地保管。
+   > 备份口令与数据密钥相互独立，忘记备份口令 = 备份不可恢复；建议与备份分处两地保管。
 
 3. **启动**
    ```bash
@@ -31,9 +31,9 @@
    # 开发热重载：KRUSKAL_DEV=1 bash backend/start.sh（生产勿开，重载即锁库）
    ```
 
-4. 迁移后可用浏览器验证：登录 → 各页数据是否完整；无需迁移任何加密密钥（.kek 随 data 目录一起走）。
+4. 迁移后在新机器本机打开 <http://127.0.0.1:18080/> 验证各页数据是否完整；`.autokey` 与 `.kek.auto` 随 data 目录一起走，丢失则正文无法解密。
 
-## 可选：systemd 开机自启
+## 可选：systemd 开机自启（仅本机，保持 127.0.0.1 监听）
 
 ```bash
 sudo cp deploy/kruskal.service /etc/systemd/system/

@@ -4,7 +4,6 @@ title Kruskal Local Server
 cd /d "%~dp0"
 
 set "KRUSKAL_HOST=127.0.0.1"
-set "KRUSKAL_LOCAL_NO_PASSWORD=1"
 set "KRUSKAL_PORT=18080"
 set "PYTHONIOENCODING=utf-8"
 

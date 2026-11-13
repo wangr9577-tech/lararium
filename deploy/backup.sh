@@ -4,7 +4,7 @@
 # 说明：
 #   - site.db 用 python stdlib sqlite3.backup() 先做一致性快照再打包（WAL 模式直拷会撕裂/丢最近数据）；
 #   - 归档用 openssl enc（PBKDF2 60万次迭代 + 随机盐）加密——需要【备份口令】，
-#     与主密码相互独立：备份口令忘记 = 备份不可恢复；主密码泄露 ≠ 备份泄露。
+#     与数据密钥相互独立：备份口令忘记 = 备份不可恢复；数据目录泄露 ≠ 备份泄露。
 #   - 恢复：deploy/restore.sh <文件.tar.gz.enc>（会先校验 sha256）。
 #   - cron 非交互场景：设 KRUSKAL_BACKUP_PW 环境变量（注意该方式口令可被同机用户从进程环境读出，权衡使用）。
 # 用法: ./deploy/backup.sh [输出目录，默认 <仓库根>/backups]

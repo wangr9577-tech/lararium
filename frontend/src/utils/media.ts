@@ -2,7 +2,7 @@ import { http } from '../api/client'
 
 /**
  * 站内图片（/api/notes/images/...）显示统一入口：
- * 图片接口需登录鉴权，而 <img src> 无法携带 Authorization header，
+ * 图片接口需要会话 token，而 <img src> 无法携带 Authorization header，
  * 故用带鉴权的 blob 下载后替换为 objectURL（与相册照片同一模式，
  * token 只走 header，不进 URL、不进访问日志）。
  */
@@ -27,7 +27,7 @@ export function resolveMediaUrl(url: string): Promise<string> {
     })
     .catch(() => {
       pending.delete(url)
-      return url // 失败（如登录过期）保留原 URL，由外层 401 拦截器统一处理
+      return url // 失败（如会话过期）保留原 URL，由外层 401 拦截器统一处理
     })
   pending.set(url, p)
   return p

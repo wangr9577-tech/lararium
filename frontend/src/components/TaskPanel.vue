@@ -58,13 +58,16 @@
     </div>
 
     <!-- 任务列表（可打勾） -->
-    <div class="btitle">今日任务</div>
+    <div class="btitle">当天任务</div>
     <div class="blist">
+      <div v-for="it in todos" :key="it.id">
       <EntryItem
-        v-for="it in todos" :key="it.id" :entry="it"
+        :entry="it"
         @toggle="(v: boolean) => onToggle(it, v)"
-        @edit="openEdit" @del="onDel"
+        @edit="entry => emit('edit-entry', entry)" @del="entry => emit('delete-entry', entry)"
       />
+      <el-button text size="small" @click="router.push({ path: '/pomodoro', query: { task: String(it.id), date: it.date } })">开始专注</el-button>
+      </div>
       <div v-if="!todos.length" class="sempty">这一天还没有任务，快添加一条</div>
     </div>
 
@@ -102,7 +105,7 @@ import EntryItem, { type Entry } from './EntryItem.vue'
 const router = useRouter()
 
 /** 任务变更后通知父级（日历/抽屉）刷新 */
-const emit = defineEmits<{ (e: 'changed'): void }>()
+const emit = defineEmits<{ (e: 'changed'): void; (e: 'date-change', date: string): void; (e: 'edit-entry', entry: Entry): void; (e: 'delete-entry', entry: Entry): void }>()
 
 const pad = (n: number) => String(n).padStart(2, '0')
 const fmtDate = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
@@ -167,7 +170,7 @@ const allDdls = computed<DdlItem[]>(() => {
 
 function onDdlClick(it: DdlItem) {
   if (it.isSchedule && it.rawEntry) {
-    openEdit(it.rawEntry)
+    emit('edit-entry', it.rawEntry)
   } else {
     router.push('/assistant')
   }
@@ -177,7 +180,7 @@ async function loadData() {
   try {
     const r = await http.get<{ items: Entry[] }>(`/schedule/day?date=${selDate.value}`)
     dayItems.value = r.items
-  } catch { /* 401/423 跳登录 */ }
+  } catch { /* 会话失效由 client 统一处理 */ }
 
   try {
     asstNotices.value = await assistantApi.list('notice')
@@ -196,6 +199,7 @@ function move(dir: number) {
   const d = new Date(selDate.value)
   d.setDate(d.getDate() + dir)
   selDate.value = fmtDate(d)
+  emit('date-change', selDate.value)
   loadData()
 }
 
@@ -203,6 +207,7 @@ function goToday() {
   const t = fmtDate(new Date())
   if (t === selDate.value) return
   selDate.value = t
+  emit('date-change', selDate.value)
   loadData()
 }
 
@@ -286,7 +291,7 @@ async function onDel(entry: Entry) {
 
 loadData()
 
-defineExpose({ setDate })
+defineExpose({ setDate, refresh: loadData })
 </script>
 
 <style scoped>

@@ -1,19 +1,17 @@
 <template>
   <div class="bg-layer" :style="{ backgroundImage: `url(${bgUrl})` }" aria-hidden="true"></div>
-  <AppShell v-if="!route.meta.public" />
-  <router-view v-else />
+  <AppShell />
+  <LegacyStateConflicts />
 </template>
 
 <script setup lang="ts">
-import { useRoute } from 'vue-router'
 import AppShell from './layout/AppShell.vue'
 import bgUrl from './assets/background.jpg'
-
-const route = useRoute()
+import LegacyStateConflicts from './components/LegacyStateConflicts.vue'
 </script>
 
 <style scoped>
-/* 全站背景：暗黑主题（默认）用二次元图；明亮主题用纯渐变底（图只留在登录页） */
+/* 全站背景：暗黑主题用二次元图，明亮主题用纯渐变底 */
 .bg-layer {
   position: fixed;
   inset: 0;

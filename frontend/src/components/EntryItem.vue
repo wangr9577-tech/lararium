@@ -11,6 +11,8 @@
         <span v-if="entry.time_start" class="etime">{{ entry.time_start }}</span>
         <span class="etitle" :class="{ done: entry.done }">{{ entry.title }}</span>
         <span v-if="entry.type === 'ddl' && !entry.done" class="eddl">DDL</span>
+        <span v-if="entry.priority">{{ ({ high: '高', medium: '中', low: '低' } as Record<string,string>)[entry.priority] }}优先级</span>
+        <span v-if="entry.estimate_min">预计 {{ entry.estimate_min }} 分钟</span>
       </div>
       <div v-if="entry.note" class="enote">{{ entry.note }}</div>
     </div>
@@ -39,6 +41,9 @@ export interface Entry {
   time_start: string
   note: string
   done: boolean
+  priority?: string
+  estimate_min?: number | null
+  series_id?: string
 }
 
 const emit = defineEmits<{

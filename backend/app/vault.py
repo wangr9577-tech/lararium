@@ -1,7 +1,7 @@
 """vault：进程内持有数据密钥(DEK)，提供加密正文文件的读写统一入口。
 
-解锁时机：登录 / 修改密码成功后由 routers.auth 注入 DEK。
-未解锁时抛 423（前端拦截后引导重新登录，登录即自动解锁）。
+解锁时机：服务启动时由 `app/autokey.py` 用本机密钥注入 DEK（见 main.py）。
+未解锁时抛 423（正常情况下启动阶段就会中止，不会跑到这里）。
 
 所有落盘写入一律原子化：同目录临时文件 + fsync + os.replace，
 避免崩溃/掉电留下半截密文导致整个文件报废。
@@ -62,7 +62,7 @@ def has_dek() -> bool:
 
 def dek() -> bytes:
     if _dek is None:
-        raise HTTPException(status_code=423, detail="数据未解锁，请重新登录后重试")
+        raise HTTPException(status_code=423, detail="数据未解锁，请重启本机服务后重试")
     return _dek
 
 

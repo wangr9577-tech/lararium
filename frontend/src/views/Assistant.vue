@@ -38,8 +38,6 @@
         </div>
       </div>
 
-      <DiaryAssistant />
-
       <!-- 顶部统一输入区 -->
       <div
         class="input-card glass"
@@ -445,7 +443,6 @@
 <script setup lang="ts">
 import { computed, defineComponent, h, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import DiaryAssistant from '../components/DiaryAssistant.vue'
 import {
   ElMessage,
   ElMessageBox,

@@ -1,4 +1,4 @@
-"""回收站 API：查看 / 恢复 / 永久删除（均需登录）。"""
+"""回收站 API：查看 / 恢复 / 永久删除（均需本机会话）。"""
 from __future__ import annotations
 
 import re

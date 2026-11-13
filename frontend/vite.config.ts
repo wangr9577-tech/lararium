@@ -10,6 +10,8 @@ export default defineConfig({
   },
   build: {
     outDir: 'dist',
+    // 保留旧版哈希资源，让构建前已打开的页面仍能懒加载其他页面。
+    emptyOutDir: false,
     chunkSizeWarningLimit: 1600,
     rollupOptions: {
       output: {

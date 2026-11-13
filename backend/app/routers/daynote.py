@@ -7,7 +7,7 @@
   - 真正要带时间、要勾选、要提醒的，仍然写在「日程表」里（这里不自动同步）。
   - 日记在日程页（data/diary），笔记·博客在 data/notes —— 三者互不影响。
 
-存储：data/daynote/note.md，整篇经 vault 加密落盘（AES-GCM，未登录不可读）。
+存储：data/daynote/note.md，整篇经 vault 加密落盘（AES-GCM，未解锁不可读）。
 """
 from __future__ import annotations
 

@@ -49,6 +49,11 @@ export interface StrokeV3 {
   w: number
   tip?: TipKey
   sp?: boolean
+  /** 笔刷算法版本；缺省为历史渲染，1 为当前笔刷。 */
+  bv?: 1
+  /** 钢笔压感强度及墨迹不透明度；缺省沿用旧笔迹设置。 */
+  sensitivity?: number
+  opacity?: number
   pts: InkSampleV3[]
   rev?: number
 }
@@ -244,9 +249,8 @@ export function makePage(w: number, h: number, paper?: PaperMeta): PageData {
 /** 笔迹填充不透明度（与组件 drawOne 932 行一致）：
  *  hl → 0.32；tip==='marker' → 0.92；其余 → 1。 */
 export function strokeAlpha(stroke: StrokeV3): number {
-  if (stroke.tool === 'hl') return 0.32
-  if (stroke.tip === 'marker') return 0.92
-  return 1
+  const base = stroke.tool === 'hl' ? 0.32 : stroke.tip === 'marker' ? 0.92 : 1
+  return base * (stroke.opacity ?? 1)
 }
 
 /** backing store 字节数估算：wPx*dpr * hPx*dpr * 4（32bit/像素）。 */

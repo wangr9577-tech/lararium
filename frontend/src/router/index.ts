@@ -1,5 +1,4 @@
 import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router'
-import { getToken, setToken, USER_KEY } from '../api/client'
 import { site } from '../stores/site'
 
 export interface NavItem {
@@ -12,11 +11,10 @@ export interface NavItem {
 export const navItems: NavItem[] = [
   { path: '/', title: '首页', icon: 'HomeFilled', group: '工作区' },
   { path: '/schedule', title: '日程', icon: 'Memo', group: '工作区' },
+  { path: '/pomodoro', title: '番茄钟', icon: 'Timer', group: '工作区' },
   { path: '/assistant', title: '助手', icon: 'ChatLineRound', group: '工作区' },
   { path: '/ledger', title: '钱包', icon: 'Wallet', group: '工作区' },
   { path: '/notes', title: '笔记·博客', icon: 'Notebook', group: '工作区' },
-  // 项目文档：把各项目的 md 目录挂进来直接读/改（文件留在原处，agent 读的是同一份）
-  { path: '/projects', title: '项目文档', icon: 'FolderOpened', group: '工作区' },
   { path: '/papers', title: '论文阅读', icon: 'Reading', group: '工作区' },
   { path: '/me', title: '个人主页', icon: 'User', group: '工作区' },
   { path: '/album', title: '相册', icon: 'Picture', group: '生活区' },
@@ -31,7 +29,6 @@ export const navGroups = ['工作区', '生活区', '系统']
 // redirect/children 以 `?: undefined` 注入个别成员，导致与
 // RouteRecordSingleView 的 `redirect?: never; children?: never` 冲突
 const routes: RouteRecordRaw[] = [
-  { path: '/login', name: 'login', component: () => import('../views/Login.vue'), meta: { public: true, title: '登录' } },
   ...navItems.map((n) => ({
     path: n.path,
     component: () => import(`../views/${viewName(n.path)}.vue`),
@@ -40,13 +37,13 @@ const routes: RouteRecordRaw[] = [
   // 工作台已下线：重定向到首页
   { path: '/lab', redirect: '/' },
   { path: '/lab/:pathMatch(.*)*', redirect: '/' },
+  // 登录页已下线（本机免登录）：旧书签回首页
+  { path: '/login', redirect: '/' },
   // 笔记子页（不进导航）
   { path: '/notes/new', component: () => import('../views/NoteEdit.vue'), meta: { title: '新建笔记' } },
   { path: '/notes/:id', component: () => import('../views/NoteView.vue'), meta: { title: '阅读笔记' } },
-  { path: '/notes/:id/edit', component: () => import('../views/NoteEdit.vue'), meta: { title: '编辑笔记' } },
-  // 项目文档：阅读 / 编辑（query: sid + path，不进导航的二级页）
-  { path: '/projects/doc', component: () => import('../views/ProjectDocView.vue'), meta: { title: '项目文档' } },
-  { path: '/projects/edit', component: () => import('../views/ProjectDocEdit.vue'), meta: { title: '编辑项目文档' } },
+  // 查看与编辑已合一：/edit 旧链接仍可用，由阅读页原地进入编辑态
+  { path: '/notes/:id/edit', component: () => import('../views/NoteView.vue'), meta: { title: '编辑笔记' } },
   // 论文阅读器（不进导航）
   { path: '/papers/:id', component: () => import('../views/PaperView.vue'), meta: { title: '论文阅读' } },
   // 雅思学习（不进导航，由 笔记·博客 列表入口进入；主页=卡片墙，点卡进子页）
@@ -68,17 +65,17 @@ const routes: RouteRecordRaw[] = [
   { path: '/experiments/:pathMatch(.*)*', component: () => import('../views/NotFound.vue'), meta: { title: '404' } },
   { path: '/writing/:pathMatch(.*)*', component: () => import('../views/NotFound.vue'), meta: { title: '404' } },
   { path: '/submissions/:pathMatch(.*)*', component: () => import('../views/NotFound.vue'), meta: { title: '404' } },
-  { path: '/:pathMatch(.*)*', component: () => import('../views/NotFound.vue'), meta: { public: true, title: '404' } },
+  { path: '/:pathMatch(.*)*', component: () => import('../views/NotFound.vue'), meta: { title: '404' } },
 ]
 
 function viewName(path: string): string {
   const map: Record<string, string> = {
     '/': 'Dashboard',
     '/schedule': 'Schedule',
+    '/pomodoro': 'Pomodoro',
     '/assistant': 'Assistant',
     '/ledger': 'Ledger',
     '/notes': 'Notes',
-    '/projects': 'Projects',
     '/papers': 'Papers',
     '/me': 'Me',
     '/album': 'Album',
@@ -92,24 +89,6 @@ function viewName(path: string): string {
 const router = createRouter({
   history: createWebHistory(),
   routes,
-})
-
-router.beforeEach(async (to) => {
-  if (!getToken()) {
-    try {
-      const response = await fetch('/api/auth/local-session', { method: 'POST' })
-      if (response.ok) {
-        const data = await response.json()
-        setToken(data.token)
-        localStorage.setItem(USER_KEY, data.username)
-        sessionStorage.setItem('krs_local_mode', '1')
-      }
-    } catch { /* Normal password login remains available. */ }
-  }
-  const hasToken = !!getToken()
-  if (!to.meta.public && !hasToken) return { path: '/login' }
-  if (to.path === '/login' && hasToken) return { path: '/' }
-  return true
 })
 
 router.afterEach((to) => {

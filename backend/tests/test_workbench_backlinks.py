@@ -1,11 +1,7 @@
-"""工作台事项与资料双向反向引用（Backlinks）与项目文档关联测试套件。"""
+"""工作台事项与资料双向反向引用（Backlinks）测试套件。"""
 from __future__ import annotations
 
-import json
-import os
-import shutil
 import sys
-import tempfile
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -14,7 +10,6 @@ sys.path.insert(0, str(REPO_ROOT / "backend"))
 from starlette.testclient import TestClient
 from backend.tests.test_env import TestEnvironment
 from app import config, db, vault
-from app.auth import bootstrap_admin
 from app.db import init_db
 from app.main import app
 
@@ -24,7 +19,6 @@ client = env.client
 
 def setup_module():
     env.setup()
-    config.CODE_ROOT = Path(env.tmp_dir)
 
 
 def teardown_module():
@@ -110,50 +104,6 @@ def test_workbench_links_and_backlinks():
     assert data_paper["items"][0]["id"] == parent_id
     assert data_paper["items"][0]["title"] == "高校重点实验室申报推进"
     assert data_paper["items"][0]["parent_title"] is None
-
-    # 8. 测试项目文档 doc / project_doc 支持
-    # 配置临时外部项目文档源
-    doc_src_dir = Path(env.tmp_dir) / "sample_project"
-    doc_src_dir.mkdir(parents=True, exist_ok=True)
-    sample_doc = doc_src_dir / "architecture.md"
-    sample_doc.write_text("# 架构设计说明\n\n系统多级软链接设计。", encoding="utf-8")
-
-    with db.db() as conn:
-        conn.execute(
-            "INSERT OR REPLACE INTO settings(key, value) VALUES(?, ?)",
-            ("doc_sources", json.dumps([{
-                "id": "proj1",
-                "name": "示例工程",
-                "root": str(doc_src_dir),
-                "include": [],
-                "readonly": False,
-            }]))
-        )
-
-    # 关联 project_doc
-    target_doc_id = "proj1:architecture.md"
-    r_link_doc = client.post(f"/api/workbench/items/{parent_id}/links", json={
-        "target_type": "doc",
-        "target_id": target_doc_id,
-    }, headers=headers)
-    assert r_link_doc.status_code == 201, f"关联项目文档失败: {r_link_doc.text}"
-
-    # 验证反向引用查询 project_doc / doc
-    r_back_doc = client.get(f"/api/workbench/links/backlinks?target_type=doc&target_id={target_doc_id}", headers=headers)
-    assert r_back_doc.status_code == 200
-    assert len(r_back_doc.json()["items"]) == 1
-    assert r_back_doc.json()["items"][0]["id"] == parent_id
-
-    # 用 project_doc 查询也能命中
-    r_back_pdoc = client.get(f"/api/workbench/links/backlinks?target_type=project_doc&target_id={target_doc_id}", headers=headers)
-    assert r_back_pdoc.status_code == 200
-    assert len(r_back_pdoc.json()["items"]) == 1
-
-    # 9. 测试 selector 检索 doc
-    r_sel = client.get("/api/workbench/selector?kind=all&q=架构", headers=headers)
-    assert r_sel.status_code == 200
-    items = r_sel.json()["items"]
-    assert any(it["target_type"] == "doc" and "架构" in it["title"] for it in items)
 
 
 if __name__ == "__main__":

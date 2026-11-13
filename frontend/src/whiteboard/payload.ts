@@ -45,7 +45,7 @@ function paperFrom(src: any): PaperMeta {
  *  - tip 非法 → 删除
  *  - pts 过滤掉 x/y/p 任一为非有限数字的采样，p 夹到 0..1
  *  - t/tilt(tx/ty/tw) 为可选，仅在有合法有限值时保留
- *  - sp(boolean)、rev(有限 number) 为合法时原样保留
+ *  - sp(boolean)、bv(已支持的笔刷版本)、rev(有限 number) 为合法时原样保留
  *  假定入参经 ensureStrokeIds 处理过（id 已存在、对象非空）。 */
 function sanitizeStroke(s: StrokeV3): StrokeV3 {
   const tool: Tool = TOOL_SET.includes(s.tool) ? s.tool : 'pen'
@@ -77,6 +77,9 @@ function sanitizeStroke(s: StrokeV3): StrokeV3 {
   const out: StrokeV3 = { id: s.id, tool, color, w, pts }
   if (tip !== undefined) out.tip = tip
   if (typeof s.sp === 'boolean') out.sp = s.sp
+  if (s.bv === 1) out.bv = 1
+  if (typeof s.sensitivity === 'number' && Number.isFinite(s.sensitivity)) out.sensitivity = Math.max(0, Math.min(1, s.sensitivity))
+  if (typeof s.opacity === 'number' && Number.isFinite(s.opacity)) out.opacity = Math.max(0.1, Math.min(1, s.opacity))
   if (typeof s.rev === 'number' && Number.isFinite(s.rev)) out.rev = s.rev
   return out
 }
@@ -157,6 +160,8 @@ export function strokeSignature(stroke: StrokeV3): string {
     stroke.w,
     stroke.tip,
     stroke.sp,
+    stroke.bv,
+    stroke.sensitivity,
     pts.length,
     first.x,
     first.y,

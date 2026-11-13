@@ -10,9 +10,6 @@
       <el-button v-if="form.fmt === 'ink'" text class="fs-btn" :title="immersive ? '退出全屏' : '全屏书写（隐藏顶栏底栏，纸面吃满屏幕）'" @click="toggleImmersive">
         <el-icon style="margin-right:4px"><FullScreen /></el-icon>{{ immersive ? '退出全屏' : '全屏' }}
       </el-button>
-      <span class="save-hint" title="也可用 Ctrl+S 或底部按钮手动保存">
-        每 5 分钟自动保存 · 上次 {{ lastSavedAt || '—' }}
-      </span>
     </div>
 
     <WhiteboardCanvas v-if="form.fmt === 'ink'" ref="wbRef" v-model="form.content" />
@@ -22,7 +19,6 @@
         <el-button size="small" text @click="refOpen = true">
           <el-icon style="margin-right:4px"><Connection /></el-icon>引用文章
         </el-button>
-        <span class="md-toolbar-hint">Markdown 即时渲染：# 标题 / **加粗** / $公式$ / 表格边打边出效果 · 截图 Ctrl+V 或拖入图片自动上传</span>
       </div>
       <VditorEditor ref="vdRef" v-model="form.content" :min-height="560" @save="doSave" />
     </template>
@@ -173,11 +169,17 @@ function emptyInkPayload(): string {
   return JSON.stringify({ v: 1, page: { w: 1000, h: 1414 }, strokes: [] })
 }
 
-function inkStrokesCount(raw: string): number {
+function inkHasContent(raw: string): boolean {
+  if (!raw.trim()) return false
   try {
     const o = JSON.parse(raw)
-    return Array.isArray(o?.strokes) ? o.strokes.length : 0
-  } catch { return 0 }
+    const pages = Array.isArray(o?.pages) ? o.pages : [o]
+    return pages.some((page: any) =>
+      (Array.isArray(page?.strokes) && page.strokes.length > 0) ||
+      (Array.isArray(page?.images) && page.images.length > 0))
+  } catch {
+    return true
+  }
 }
 
 async function pickFmt(next: 'md' | 'ink') {
@@ -197,14 +199,14 @@ async function pickFmt(next: 'md' | 'ink') {
     ElMessage.success('已切换为白板手写：用触控笔或鼠标在白色纸面上书写')
   } else {
     // 白板 → 文本：现有笔迹将被清空
-    if (inkStrokesCount(form.content) > 0) {
+    if (inkHasContent(form.content)) {
       try {
         await ElMessageBox.confirm(
-          '切换为「文本」将清空当前全部笔迹，且不可恢复。确定切换吗？',
+          '切换为「文本」将清空当前白板内容，且不可恢复。确定切换吗？',
           '切换正文形式', { type: 'warning', confirmButtonText: '切换并清空', cancelButtonText: '取消' })
       } catch { return }
-      form.content = ''
     }
+    form.content = ''
     form.fmt = 'md'
     ElMessage.success('已切换为文本笔记')
   }
@@ -320,7 +322,7 @@ async function tryAutoSave(): Promise<boolean> {
   const rawTitle = form.title.trim()
   if (!rawTitle && !form.content.trim()) return true // 完全空白不建档
   // 白板尚无任何笔迹且无标题：不自动建档（避免误切换就产生空笔记）
-  if (!rawTitle && form.fmt === 'ink' && inkStrokesCount(form.content) === 0) return true
+  if (!rawTitle && form.fmt === 'ink' && !inkHasContent(form.content)) return true
   autoBusy.value = true
   const body = { ...payloadRaw(), title: rawTitle || '未命名' }
   try {

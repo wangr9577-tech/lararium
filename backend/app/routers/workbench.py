@@ -46,7 +46,7 @@ MAX_SOURCE = 100
 MAX_URL = 1000
 MAX_CONTENT_TAG = 60       # 事务性字段（kind 等）的宽松上限
 
-TARGET_TYPES = ("note", "paper", "doc", "project_doc", "assistant_record")
+TARGET_TYPES = ("note", "paper", "assistant_record")
 
 UNNAMED = "未命名"          # 标题留空时的事项名（首次写入思路会自动改成正文第一行）
 
@@ -75,9 +75,9 @@ def _text(raw: object, limit: int, what: str) -> str:
 
 
 def _require_dek() -> None:
-    """写正文前必须先解锁：锁定态返回 423，前端拦截后引导重新登录（与笔记一致）。"""
+    """写正文前必须先解锁：锁定态返回 423，前端提示重启本机服务（与笔记一致）。"""
     if not vault.has_dek():
-        raise HTTPException(423, "数据未解锁，请重新登录后重试")
+        raise HTTPException(423, "数据未解锁，请重启本机服务后重试")
 
 
 def summarize(body: str, n: int = 80) -> str:
@@ -200,52 +200,11 @@ def _paper_meta(paper_id: str) -> dict | None:
     }
 
 
-def _doc_meta(target_id: str) -> dict | None:
-    """读外部项目文档的元信息（标题/路径）；不存在或无法读取返回 None。"""
-    try:
-        from .fs import _safe, _peek_title, _load_sources
-        if ":" in target_id:
-            sid, rel = target_id.split(":", 1)
-            src, p, relp = _safe(sid, rel)
-            if not p.is_file():
-                return None
-            title = _peek_title(p)
-            return {
-                "id": target_id,
-                "title": title or p.stem,
-                "type": "doc",
-                "folder": f"{src.get('name', '')}/{relp}",
-                "sid": sid,
-                "path": relp,
-            }
-        else:
-            for s in _load_sources():
-                try:
-                    src, p, relp = _safe(s["id"], target_id)
-                    if p.is_file():
-                        title = _peek_title(p)
-                        return {
-                            "id": f"{s['id']}:{relp}",
-                            "title": title or p.stem,
-                            "type": "doc",
-                            "folder": f"{src.get('name', '')}/{relp}",
-                            "sid": s["id"],
-                            "path": relp,
-                        }
-                except Exception:
-                    continue
-            return None
-    except Exception:
-        return None
-
-
 def _target_meta(target_type: str, target_id: str) -> dict | None:
     if target_type == "note":
         return _note_meta(target_id)
     if target_type == "paper":
         return _paper_meta(target_id)
-    if target_type in ("doc", "project_doc"):
-        return _doc_meta(target_id)
     if target_type == "assistant_record":
         with db() as conn:
             r = conn.execute("SELECT id, title FROM assistant_records WHERE id=?", (target_id,)).fetchone()
@@ -260,12 +219,6 @@ def _route_of(target_type: str, target_id: str) -> str:
         return f"/notes/{target_id}"
     if target_type == "paper":
         return f"/papers/{target_id}"
-    if target_type in ("doc", "project_doc"):
-        from urllib.parse import quote
-        if ":" in target_id:
-            sid, p = target_id.split(":", 1)
-            return f"/projects/doc?sid={quote(sid)}&path={quote(p)}"
-        return f"/projects/doc?path={quote(target_id)}"
     if target_type == "assistant_record":
         return f"/assistant?record_id={target_id}"
     return ""
@@ -1019,7 +972,7 @@ def _resolve_links(conn, item_id: int) -> list[dict]:
 
 @router.get("/links/backlinks")
 def get_backlinks(target_type: str, target_id: str, _user: dict = Depends(get_current)):
-    """反向引用查询接口：查询当前笔记、论文或文档被哪些工作台事项关联引用。
+    """反向引用查询接口：查询当前笔记或论文被哪些工作台事项关联引用。
 
     返回事项的 id, title, parent_id, parent_title, updated_at, archived 等，
     让资料知道自己属于哪些事项，形成双向网状连接。
@@ -1028,11 +981,7 @@ def get_backlinks(target_type: str, target_id: str, _user: dict = Depends(get_cu
     t_id = (target_id or "").strip()
     if not t_type or not t_id:
         raise HTTPException(400, "缺少 target_type 或 target_id")
-    type_cands = [t_type]
-    if t_type in ("doc", "project_doc"):
-        type_cands = ["doc", "project_doc"]
     with db() as conn:
-        ph = ",".join("?" * len(type_cands))
         rows = conn.execute(
             f"""
             SELECT 
@@ -1045,10 +994,10 @@ def get_backlinks(target_type: str, target_id: str, _user: dict = Depends(get_cu
             FROM workbench_links l
             JOIN workbench_items w ON l.item_id = w.id
             LEFT JOIN workbench_items p ON w.parent_id = p.id
-            WHERE l.target_type IN ({ph}) AND l.target_id = ?
+            WHERE l.target_type = ? AND l.target_id = ?
             ORDER BY w.archived ASC, w.updated_at DESC, w.id DESC
             """,
-            (*type_cands, t_id),
+            (t_type, t_id),
         ).fetchall()
         items = [
             {
@@ -1112,7 +1061,7 @@ def add_link(item_id: int, body: LinkIn, _user: dict = Depends(get_current)):
     因此笔记自动保存/多次保存、重复点「关联」都不会产生重复链接。"""
     t_type = (body.target_type or "").strip()
     if t_type not in TARGET_TYPES:
-        raise HTTPException(400, "target_type 只能是 note（博客笔记）/ paper（论文）/ doc（项目文档）")
+        raise HTTPException(400, "target_type 只能是 note（博客笔记）/ paper（论文）/ assistant_record（助手记录）")
     if t_type in ("note", "paper"):
         t_id = _text(body.target_id, 64, "资料 ID")
         if not re.fullmatch(r"[A-Za-z0-9_-]{4,64}", t_id):
@@ -1167,15 +1116,15 @@ def note_link_status(item_id: int, note_id: str, _user: dict = Depends(get_curre
     return {"linked": r is not None, "link_id": int(r["id"]) if r else None}
 
 
-# ---------- 资料搜索选择器（现有论文 + 笔记·博客 + 项目文档） ----------
+# ---------- 资料搜索选择器（现有论文 + 笔记·博客） ----------
 
 @router.get("/selector")
 def selector(q: str | None = None, kind: str = "all", limit: int = 30,
              _user: dict = Depends(get_current)):
-    """搜索可关联的现有资料：kind=all / note / paper / doc / project_doc。
-    包含普通博客笔记、论文库里的论文与项目文档；不新建任何资料。"""
-    if kind not in ("all", "note", "paper", "doc", "project_doc"):
-        raise HTTPException(400, "kind 只能是 all / note / paper / doc / project_doc")
+    """搜索可关联的现有资料：kind=all / note / paper。
+    包含普通博客笔记与论文库里的论文；不新建任何资料。"""
+    if kind not in ("all", "note", "paper"):
+        raise HTTPException(400, "kind 只能是 all / note / paper")
     limit = max(1, min(int(limit or 30), 100))
     needle = (q or "").strip().lower()
     items: list[dict] = []
@@ -1203,27 +1152,4 @@ def selector(q: str | None = None, kind: str = "all", limit: int = 30,
                 "target_type": "paper", "target_id": m["id"], "title": m["title"],
                 "kind": "paper", "author": m["author"], "status": m["status"],
             })
-    if kind in ("all", "doc", "project_doc"):
-        try:
-            from .fs import _load_sources, _norm_root, _walk_md, _peek_title
-            for src in _load_sources():
-                try:
-                    _, src_root = _norm_root(src["root"])
-                except Exception:
-                    continue
-                patterns = src.get("include") or []
-                for doc_path, relp in _walk_md(src_root, patterns, config.DOC_SCAN_MAX_DEPTH, 200):
-                    doc_title = _peek_title(doc_path)
-                    target_id = f"{src['id']}:{relp}"
-                    if needle and needle not in f"{doc_title} {relp} {src['name']}".lower():
-                        continue
-                    items.append({
-                        "target_type": "doc", "target_id": target_id, "title": doc_title,
-                        "kind": "doc", "folder": f"{src['name']}/{relp}",
-                        "summary": f"项目文档: {src['name']} ({relp})",
-                    })
-                    if len(items) >= limit * 2:
-                        break
-        except Exception:
-            pass
     return {"items": items[:limit], "total": len(items)}

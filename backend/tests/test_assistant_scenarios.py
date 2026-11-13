@@ -4,7 +4,7 @@
 1. 场景 1：稍后看轻量卡片与临时材料即焚策略（不留长文全文、不污染论文库）；
 2. 场景 2：连续通知演化与唯一 DDL 日程映射（三轮演进、去重单DDL、防歪曲热力图、手动锁定防覆盖）；
 3. 场景 3：与笔记编辑器的草稿连通（草稿结构预填、首存回写 assistant_links、状态流转至 noted）；
-4. 场景 4：Kruskal 上锁机制（Lock Guard & DEK Epoch）防御（上锁中断挂起 paused_locked、解锁无损恢复）；
+4. 场景 4：数据密钥丢失（Lock Guard & DEK Epoch）防御（中断挂起 paused_locked、恢复后无损继续）；
 5. 场景 5：模型不可用时如实失败（无规则降级伪装），问答明确标注不可用并回显资料。
 """
 from __future__ import annotations
@@ -34,14 +34,11 @@ from app.services import llm
 
 env = TestEnvironment(prefix="kruskal_scenarios_test_")
 client = env.client
-ADMIN_PW: str = ""
 
 
 def setup_module():
-    """初始化数据库并登录获取测试凭证。"""
-    global ADMIN_PW
+    """初始化数据库并建立本机会话。"""
     env.setup()
-    ADMIN_PW = env.admin_pw
 
 
 def teardown_module():
@@ -372,20 +369,22 @@ def test_scenario_3_note_draft_and_noted_state():
 
 
 # ==============================================================================
-# 场景 4：Kruskal 上锁机制（Lock Guard & DEK Epoch）防御
+# 场景 4：DEK 丢失（Lock Guard & DEK Epoch）防御
 # ==============================================================================
 
 def test_scenario_4_lock_guard_and_dek_epoch_defense():
-    """场景 4：Kruskal 上锁机制（Lock Guard & DEK Epoch）防御。
+    """场景 4：DEK 丢失（Lock Guard & DEK Epoch）防御。
     
     验证要点：
-    1. 模拟在后台作业异步处理中用户触发锁屏（/api/auth/lock 清除 DEK 并推进 epoch）；
+    1. 模拟在后台作业异步处理中数据密钥被清空（vault.clear_dek 推进 epoch）；
     2. 作业在尝试落盘时检测到世代号不匹配或无密钥，安全挂起为 paused_locked，严禁抛错崩溃；
-    3. 模拟用户重新登录解锁，挂起作业成功唤醒并恢复整理完成。
+    3. 恢复 DEK 后，挂起作业成功唤醒并恢复整理完成。
     """
-    # 模拟在 LLM 抽取阶段触发锁屏（模拟并发用户在后台处理中按下锁屏按钮）
+    saved_dek = vault.dek()
+
+    # 模拟在 LLM 抽取阶段数据密钥丢失（例如服务端密钥文件被移走）
     def mock_chat_structured_with_lock(*args, **kwargs):
-        # 触发锁屏：清空 DEK 并推进 epoch
+        # 清空 DEK 并推进 epoch
         vault.clear_dek()
         return {
             "title": "实验室安全整顿大会",
@@ -417,12 +416,11 @@ def test_scenario_4_lock_guard_and_dek_epoch_defense():
         rec = conn.execute("SELECT status FROM assistant_records WHERE id=?", (record_id,)).fetchone()
         assert rec["status"] in ("pending", "processing"), "记录状态不应错误标为 ready"
 
-    # 模拟用户重新登录恢复 DEK
-    login_resp = client.post("/api/auth/login", json={"username": config.ADMIN_USERNAME, "password": ADMIN_PW})
-    assert login_resp.status_code == 200
-    assert vault.has_dek(), "重新登录后 DEK 已恢复"
+    # 恢复 DEK（相当于服务重启后本机密钥重新解锁）
+    vault.set_dek(saved_dek)
+    assert vault.has_dek(), "恢复后 DEK 已就绪"
 
-    # 验证挂起作业唤醒机制（_unlock_vault 已自动调用 resume_paused_jobs 或手动触发）
+    # 验证挂起作业唤醒机制
     asst_mod.resume_paused_jobs()
 
     # 验证作业顺利完成整理

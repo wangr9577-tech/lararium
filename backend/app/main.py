@@ -5,8 +5,8 @@
 from __future__ import annotations
 
 import logging
+import mimetypes
 import os
-from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
@@ -14,32 +14,31 @@ from fastapi.staticfiles import StaticFiles
 
 from . import auth as authz
 from . import config
-from .auth import bootstrap_admin
+from .auth import ensure_local_user
 from .db import init_db
-from . import autokey  # 免密自动解锁（可选，默认关闭，见 app/autokey.py）
-from . import crypto, vault
+from . import autokey  # 本机数据密钥：启动时自动解锁
+from . import crypto
 from .routers import auth as auth_router
 from .routers import album as album_router
 from .routers import anniversary as anniversary_router
 from .routers import daynote as daynote_router
 from .routers import diary as diary_router
-from .routers import diary_assistant as diary_assistant_router
-from .routers import diary_tools as diary_tools_router
 from .routers import focus as focus_router
-# ---- 项目文档源（外部 md 挂载：浏览/搜索/阅读/编辑，只认 CODE_ROOT 之内的目录）----
-from .routers import fs as fs_router
 from .routers import holiday as holiday_router
 from .routers import ielts as ielts_router
 from .routers import ledger as ledger_router
 from .routers import notes as notes_router
 from .routers import papers as papers_router
+from .routers import paper_qa as paper_qa_router
 from .routers import pdf as pdf_router
 from .routers import ppt as ppt_router
 from .routers import schedule as schedule_router
 from .routers import settings as settings_router
+from .routers import client_state as client_state_router
 from .routers import share as share_router
 from .routers import site as site_router
 from .routers import timeline as timeline_router
+from .routers import timetable as timetable_router
 from .routers import translate, vocab as vocab_router
 from .routers import trash as trash_router
 # ---- 工作台（事项树 / 当前思路 / 小记 / 收集箱 / 相关资料）----
@@ -51,33 +50,38 @@ from .routers import assistant as assistant_router
 # ---- 资产与附件管理（Blossom 式孤立文件体检与安全清理）----
 from .routers import assets as assets_router
 
+# Chromium 严格按 MIME 加载模块脚本/Worker：Windows 的 MIME 表常把 .mjs 认成
+# text/plain，导致 pdf.js 的 module worker 被拒（"Setting up fake worker failed"）。
+# 静态资源统一按 JS 类型下发，避免前端构建产物里的 .mjs 打不开。
+mimetypes.add_type("text/javascript", ".mjs")
+
 logging.basicConfig(level=logging.INFO)
 
 init_db()
-bootstrap_admin()
+ensure_local_user()
 authz.sweep_expired()  # 启动清一轮历史过期会话（P1 token 治理）
 
-if config.LOCAL_NO_PASSWORD:
-    # Local mode is deliberately initialized only for an empty data directory.
-    # Never replace a missing key for an existing password-protected vault.
-    config.AUTOKEY_KEY = config.DATA_DIR / ".autokey"
-    if not autokey.enabled():
-        if config.KEYWRAP_PATH.exists() or config.AUTOKEY_WRAP.exists():
-            raise RuntimeError("Local key unavailable; refusing to replace existing vault key")
-        autokey.enable(crypto.new_dek())
-    if not autokey.try_unlock():
-        raise RuntimeError("Cannot unlock local data key")
-    config.INIT_PW_FILE.unlink(missing_ok=True)
+# 本机单机模式：数据密钥包裹与密钥都在数据目录，启动时自动解锁。
+# 绝不替换已有密码模式遗留的 `.kek`：缺密钥时宁可启动失败，也不能让旧密文变成永久不可读。
+if not autokey.enabled():
+    if config.KEYWRAP_PATH.exists() or config.AUTOKEY_WRAP.exists():
+        raise RuntimeError("Local key unavailable; refusing to replace existing vault key")
+    autokey.enable(crypto.new_dek())
+if not autokey.try_unlock():
+    raise RuntimeError("Cannot unlock local data key")
 
-# 免密自动解锁（可选）：解开就不必再人工输主密码；任何失败都只当没开启，绝不阻断启动
-if autokey.try_unlock():
-    logging.getLogger("kruskal").info(
-        "免密解锁生效：重启后无需输入主密码；"
-        "可在 设置 → 账户安全 关闭，「一键上锁」会同时撤销")
-    try:
-        assistant_router.resume_paused_jobs()
-    except Exception as e:
-        logging.getLogger("kruskal").warning("Startup resume_paused_jobs error: %s", e)
+logging.getLogger("kruskal").info("本机数据密钥已解锁")
+try:
+    assistant_router.resume_paused_jobs()
+except Exception as e:
+    logging.getLogger("kruskal").warning("Startup resume_paused_jobs error: %s", e)
+
+# 上传即翻译：重启后把上次没跑完（排队/中断）的论文重新排进队列
+try:
+    from .services import paper_translate as paper_translate_mod
+    paper_translate_mod.resume_pending()
+except Exception as e:
+    logging.getLogger("kruskal").warning("Startup resume_pending translations error: %s", e)
 
 try:
     assistant_router.auto_archive_stale_threads(days=180)
@@ -87,25 +91,16 @@ except Exception as e:
 # P2-L4：生产不公开 OpenAPI 接口结构（摸接口面变小）；KRUSKAL_DEV=1 才开 /docs
 _IS_DEV = os.environ.get("KRUSKAL_DEV") == "1"
 
-@asynccontextmanager
-async def _lifespan(_app):
-    diary_tools_router.start_scheduler()
-    try:
-        yield
-    finally:
-        diary_tools_router.stop_scheduler()
-
 app = FastAPI(
     title="Kruskal", version="0.1.0",
     docs_url="/docs" if _IS_DEV else None,
     redoc_url="/redoc" if _IS_DEV else None,
     openapi_url="/openapi.json" if _IS_DEV else None,
-    lifespan=_lifespan,
 )
 
 # ---- 全局安全网（P1-G2）：/api 一律要求有效 Bearer，白名单除外 ----
 # 路由内的 Depends(get_current) 保留不动：中间件兜住"新路由忘写鉴权"的结构性风险。
-_PUBLIC_API = ("/api/auth/login", "/api/auth/local-session", "/api/site")
+_PUBLIC_API = ("/api/auth/local-session", "/api/site")
 _CSP_ON = os.environ.get("KRUSKAL_CSP", "1") != "0"
 _CSP = ("default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; "
         "img-src 'self' data: blob:; font-src 'self' data:; worker-src 'self' blob:; "
@@ -119,7 +114,7 @@ async def auth_and_csp_guard(request: Request, call_next):
         header = request.headers.get("authorization", "")
         token = header[7:] if header.startswith("Bearer ") else request.query_params.get("token", "")
         if authz.token_user(token) is None:
-            resp = JSONResponse({"detail": "未登录"}, status_code=401)
+            resp = JSONResponse({"detail": "缺少本机会话"}, status_code=401)
             if _CSP_ON:
                 resp.headers["Content-Security-Policy"] = _CSP
             return resp
@@ -128,17 +123,16 @@ async def auth_and_csp_guard(request: Request, call_next):
         response.headers.setdefault("Content-Security-Policy", _CSP)
     return response
 
-for r in (auth_router.router, settings_router.router, site_router.router,
+for r in (auth_router.router, settings_router.router, client_state_router.router, site_router.router,
           translate.router, notes_router.router, focus_router.router,
-          schedule_router.router, papers_router.router, vocab_router.router,
-          diary_router.router, diary_assistant_router.router, diary_tools_router.router, holiday_router.router, anniversary_router.router,
+          schedule_router.router, papers_router.router, paper_qa_router.router, vocab_router.router, timetable_router.router,
+          diary_router.router, holiday_router.router, anniversary_router.router,
           share_router.router, album_router.router, timeline_router.router,
           ledger_router.router, ielts_router.router, ppt_router.router,
           pdf_router.router, trash_router.router,
           ai_router.router,
           daynote_router.router,
           workbench_router.router,
-          fs_router.router,
           assistant_router.router,
           assets_router.router):
     app.include_router(r)

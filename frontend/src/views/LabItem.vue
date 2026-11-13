@@ -134,7 +134,6 @@
           <span class="sec-ops">
             <el-button size="small" text @click="openPicker('paper')">关联论文</el-button>
             <el-button size="small" text @click="openPicker('note')">关联已有笔记</el-button>
-            <el-button size="small" text @click="openPicker('doc')">关联项目文档</el-button>
             <el-button size="small" text @click="newNote">
               <el-icon><Plus /></el-icon><span>新建笔记</span>
             </el-button>
@@ -164,7 +163,7 @@
             </span>
           </div>
         </div>
-        <div v-else class="muted">还没有相关资料 —— 用上面的「关联论文 / 关联已有笔记 / 关联项目文档 / 新建笔记」把入口挂到这里</div>
+        <div v-else class="muted">还没有相关资料 —— 用上面的「关联论文 / 关联已有笔记 / 新建笔记」把入口挂到这里</div>
       </section>
     </template>
 
@@ -220,7 +219,7 @@
       </template>
     </el-dialog>
 
-    <!-- 关联已有资料（论文 / 博客笔记 / 项目文档） -->
+    <!-- 关联已有资料（论文 / 博客笔记） -->
     <RelatedMaterialPicker v-model="pickerOpen" :item-id="id" :kind="pickerKind" @changed="reload" />
   </div>
 </template>

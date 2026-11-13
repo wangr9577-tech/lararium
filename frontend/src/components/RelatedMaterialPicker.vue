@@ -7,7 +7,7 @@
     @open="load"
   >
     <div class="rmp-tip">
-      关联只是在事项里建立双向软链接入口：不会修改、也不会复制资料本身的内容，资料正文仍在「笔记·博客 / 论文阅读 / 项目文档」里维护。
+      关联只是在事项里建立双向软链接入口：不会修改、也不会复制资料本身的内容，资料正文仍在「笔记·博客 / 论文阅读」里维护。
     </div>
 
     <div class="rmp-filter-row">
@@ -15,7 +15,6 @@
         <el-radio-button label="all">全部资料</el-radio-button>
         <el-radio-button label="note">笔记·博客</el-radio-button>
         <el-radio-button label="paper">论文阅读</el-radio-button>
-        <el-radio-button label="doc">项目文档</el-radio-button>
       </el-radio-group>
       <el-input v-model="q" placeholder="搜索标题 / 摘要 / 作者 / 路径…" clearable class="rmp-search-input" @input="onInput" @clear="onInput">
         <template #prefix><el-icon><Search /></el-icon></template>
@@ -40,7 +39,7 @@
       </div>
       <div v-if="!loading && !list.length" class="rmp-empty">
         没有找到可关联的资料
-        <span class="rmp-empty-hint">在「笔记·博客」、「论文阅读」或挂载的项目文档里存在资料后，即可在此检索并双向软链接</span>
+        <span class="rmp-empty-hint">在「笔记·博客」或「论文阅读」里存在资料后，即可在此检索并双向软链接</span>
       </div>
     </div>
     <template #footer>
@@ -55,7 +54,7 @@ import { ElMessage } from 'element-plus'
 import { Search } from '@element-plus/icons-vue'
 import { kindLabel, workbenchApi, type WbCandidate } from '../api/workbench'
 
-const props = defineProps<{ modelValue: boolean; itemId: number; kind?: 'all' | 'note' | 'paper' | 'doc' | 'project_doc' | string }>()
+const props = defineProps<{ modelValue: boolean; itemId: number; kind?: 'all' | 'note' | 'paper' | string }>()
 const emit = defineEmits<{ (e: 'update:modelValue', v: boolean): void; (e: 'changed'): void }>()
 
 const activeKind = ref<string>('all')
@@ -168,7 +167,6 @@ onBeforeUnmount(() => { clearTimeout(debounce) })
 }
 .rmp-type.type-note { background: rgba(167, 139, 250, 0.16); color: #8b5cf6; }
 .rmp-type.type-paper { background: rgba(59, 130, 246, 0.16); color: #3b82f6; }
-.rmp-type.type-doc, .rmp-type.type-project_doc { background: rgba(245, 158, 11, 0.16); color: #f59e0b; }
 
 .rmp-title {
   flex: none; max-width: 42%; font-weight: 600; font-size: 13.5px;

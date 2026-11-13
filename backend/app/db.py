@@ -48,6 +48,11 @@ CREATE TABLE IF NOT EXISTS settings(
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS client_state(
+    key TEXT PRIMARY KEY,
+    value BLOB NOT NULL,
+    revision INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS tasks(
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     title TEXT NOT NULL,
@@ -79,13 +84,6 @@ CREATE TABLE IF NOT EXISTS schedule(
     created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_schedule_date ON schedule(date);
-CREATE TABLE IF NOT EXISTS diary_task_requests(
-    user_id INTEGER NOT NULL,
-    request_key TEXT NOT NULL,
-    request_hash TEXT NOT NULL,
-    response_json TEXT NOT NULL,
-    PRIMARY KEY(user_id, request_key)
-);
 CREATE TABLE IF NOT EXISTS vocab(
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     word TEXT NOT NULL,
@@ -382,6 +380,16 @@ CREATE TABLE IF NOT EXISTS assistant_links (
     created_at TEXT NOT NULL,
     UNIQUE(record_id, target_type, target_id)
 );
+-- 24h 每日时间表：一条=某天某格子的文字。slot_min=格子起始分钟(0..1439)。
+-- 行距（30/20 分钟）只是前端视图口径：渲染某行 [t, t+span) 时显示落在区间内的条目，
+-- 保存时先清掉该行 span 覆盖的旧条目，两种行距切换互不丢字。
+CREATE TABLE IF NOT EXISTS timetable(
+    date TEXT NOT NULL,
+    slot_min INTEGER NOT NULL,
+    text TEXT NOT NULL DEFAULT '',
+    updated TEXT NOT NULL,
+    PRIMARY KEY(date, slot_min)
+);
 """
 
 
@@ -437,6 +445,15 @@ def init_db() -> None:
                 "SELECT id, date, kind, amount, category, note, created FROM ledger_pre_repay")
             conn.execute("DROP TABLE ledger_pre_repay")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_ledger_date ON ledger(date)")
+        schedule_cols = {r[1] for r in conn.execute("PRAGMA table_info(schedule)")}
+        for name, decl in (("priority", "TEXT NOT NULL DEFAULT ''"), ("estimate_min", "INTEGER"), ("series_id", "TEXT NOT NULL DEFAULT ''")):
+            if name not in schedule_cols:
+                conn.execute(f"ALTER TABLE schedule ADD COLUMN {name} {decl}")
+        # Focus metadata: preserve old rows as unknown rather than guessing their origin.
+        focus_cols = {r[1] for r in conn.execute("PRAGMA table_info(focus)")}
+        for name, decl in (("source", "TEXT NOT NULL DEFAULT 'unknown'"), ("schedule_id", "INTEGER")):
+            if name not in focus_cols:
+                conn.execute(f"ALTER TABLE focus ADD COLUMN {name} {decl}")
         # vocab 复习字段迁移（老库补列）
         cols = {r[1] for r in conn.execute("PRAGMA table_info(vocab)")}
         for name, decl in (

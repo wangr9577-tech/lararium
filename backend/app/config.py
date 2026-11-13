@@ -9,12 +9,15 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
-# 数据目录：所有用户内容（笔记/日记/论文/相册/说说/密钥包裹）都在这里
-DATA_DIR = Path(os.environ.get("KRUSKAL_DATA_DIR", str(REPO_ROOT / "backend" / "data")))
-LOCAL_NO_PASSWORD = os.environ.get("KRUSKAL_LOCAL_NO_PASSWORD") == "1"
+def _configured_path(value: str) -> Path:
+    """Resolve relative configuration paths against the project, not the launch cwd."""
+    path = Path(value).expanduser()
+    return path if path.is_absolute() else REPO_ROOT / path
 
-# 仅绑定本机回环：跨子网/校外访问一律走 SSH 隧道或出站隧道（详见 deploy/ACCESS.md）
-# 如需临时放开，用环境变量 KRUSKAL_HOST=0.0.0.0 覆盖
+# 数据目录：所有用户内容（笔记/日记/论文/相册/密钥包裹）都在这里
+DATA_DIR = _configured_path(os.environ.get("KRUSKAL_DATA_DIR", "backend/data"))
+
+# 单机应用：只监听本机回环，不做对外服务
 HOST = os.environ.get("KRUSKAL_HOST", "127.0.0.1")
 PORT = int(os.environ.get("KRUSKAL_PORT", "18080"))
 
@@ -23,18 +26,14 @@ DB_PATH = DATA_DIR / "site.db"
 # 本地私有配置文件：存储用户在前端填写的私有设置（AI 渠道、API 密钥、个人配置等），
 # 独立于代码文件落盘在 DATA_DIR 中，受 .gitignore 绝对忽略，严禁上传到 Git
 LOCAL_SETTINGS_PATH = DATA_DIR / "local_settings.json"
-KEYWRAP_PATH = DATA_DIR / ".kek"                # 数据密钥包裹文件（由主密码派生密钥加密）
-KEYWRAP_JOURNAL = DATA_DIR / ".kek.journal"     # 改密两阶段日志：记新包裹，DB 提交成功后才 rename 覆盖
-INIT_PW_FILE = DATA_DIR / "initial_password.txt"
+# 旧版密码模式的密钥包裹：只在启动时用于识别「已有加密数据」并拒绝覆盖（见 main.py）
+KEYWRAP_PATH = DATA_DIR / ".kek"
 
-# ---- 免密自动解锁（可选，默认关闭，见 app/autokey.py）----
-# 包裹文件跟数据一起走（它是 .kek 之外的另一道锁，单独拿到解不开）；
-# 本机密钥默认落在 DATA_DIR **之外**，因此不会被 deploy/backup.sh 打进备份包：
-# 拷走备份 = 拿到 .kek 与 .kek.auto 两道都解不开的密文，仍需主密码或本机密钥。
+# ---- 本机数据密钥：包裹与密钥都随数据目录走，启动时自动解锁（见 app/autokey.py）----
 AUTOKEY_WRAP = DATA_DIR / ".kek.auto"
-AUTOKEY_KEY = Path(os.environ.get("KRUSKAL_AUTOKEY", str(REPO_ROOT / "backend" / ".autokey")))
+AUTOKEY_KEY = DATA_DIR / ".autokey"
 
-ADMIN_USERNAME = "admin"
+ADMIN_USERNAME = "admin"  # 本机唯一用户（沿用旧库里的用户名）
 TOKEN_TTL_DAYS = 30
 
 # 内容子目录（正文 md / 资源均存于 DATA_DIR，正文按功能期实现加密）
@@ -49,29 +48,9 @@ SUBDIRS = ["notes", "diary", "papers", "uploads", "album", "share", "tmp", "holi
            "assistant"]
 
 # 代码工作区白名单根目录（M8）：浏览器里只能看/改这个目录树，防路径穿越
-_default_code_root = Path(os.environ.get("KRUSKAL_CODE_ROOT",
-                                        Path.home() / "workspace"))
+_default_code_root = _configured_path(os.environ.get("KRUSKAL_CODE_ROOT",
+                                                    str(Path.home() / "workspace")))
 CODE_ROOT = _default_code_root if _default_code_root.exists() else REPO_ROOT
-
-# ---- 项目文档源（外部 md 挂载，见 routers/fs.py）----
-# 唯一真相留在项目目录里（明文 / git 管 / agent 可读），网站只当它的视图 + 可选编辑器，
-# 从根上避免「博客一份、项目一份」的分叉。只允许 CODE_ROOT 之内的目录做源。
-DOC_EXTS = (".md", ".markdown")          # 只挂 md 文档（其它格式一律不挂）
-DOC_MAX_BYTES = 1 << 20                  # 单文件读写上限 1MB
-DOC_LIST_MAX = 200                       # 目录树每层最多返回条目（防爆列表）
-DOC_SEARCH_MAX = 50                      # 搜索命中上限
-DOC_SEARCH_SCAN_MAX = 4000               # 单次搜索最多扫描的文件数
-DOC_SCAN_MAX_DEPTH = 8                   # 扫描（搜索/发现）最大目录深度
-DOC_IMG_MAX_BYTES = 20 << 20             # md 内嵌图片（只读）上限 20MB
-DOC_IMG_EXT = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
-               "gif": "image/gif", "webp": "image/webp", "bmp": "image/bmp",
-               "avif": "image/avif"}
-# 噪声目录：任何深度都跳过（不进列表、不进搜索、不可读写）。
-# 想挂其中的文档，在该源的 include 规则里显式写一条（如 "data/docs/**"）即可放行。
-DOC_HIDE_DIRS = {".git", ".svn", ".hg", "node_modules", "__pycache__", ".venv", "venv",
-                 "env", ".tox", "dist", "build", ".next", ".nuxt", ".cache", ".idea",
-                 ".vscode", ".mypy_cache", ".pytest_cache", ".ruff_cache",
-                 "site-packages", "data", "tmp", ".e2e-shots", ".agent-teams"}
 
 # AI 服务（M7）：本地 / SSH 隧道 OpenAI 兼容端点（如 ollama / vllm / remote-tunnel）
 AI_PROVIDER = os.environ.get("KRUSKAL_AI_PROVIDER", "ollama")
@@ -97,16 +76,14 @@ def ensure_layout() -> None:
 
 def rebind_data_dir(new_data_dir: Path | str) -> None:
     """动态重定向数据目录（支持测试隔离、沙箱迁移与多套件级联测试）。"""
-    global DATA_DIR, DB_PATH, KEYWRAP_PATH, KEYWRAP_JOURNAL, INIT_PW_FILE, TMP_DIR
+    global DATA_DIR, DB_PATH, KEYWRAP_PATH, TMP_DIR
     global AUTOKEY_WRAP, AUTOKEY_KEY, LOCAL_SETTINGS_PATH
     DATA_DIR = Path(new_data_dir)
     DB_PATH = DATA_DIR / "site.db"
     LOCAL_SETTINGS_PATH = DATA_DIR / "local_settings.json"
     KEYWRAP_PATH = DATA_DIR / ".kek"
-    KEYWRAP_JOURNAL = DATA_DIR / ".kek.journal"
-    INIT_PW_FILE = DATA_DIR / "initial_password.txt"
     TMP_DIR = DATA_DIR / "tmp"
-    # 测试隔离：沙箱里两个文件都收进临时数据目录，绝不碰真实主机上的 backend/.autokey
+    # 沙箱里密钥都收进临时数据目录，绝不碰真实主机上的密钥
     AUTOKEY_WRAP = DATA_DIR / ".kek.auto"
     AUTOKEY_KEY = DATA_DIR / ".autokey"
     ensure_layout()

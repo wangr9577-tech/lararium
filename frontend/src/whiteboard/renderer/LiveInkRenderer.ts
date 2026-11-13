@@ -61,7 +61,7 @@ export class LiveInkRenderer {
   begin(stroke: LiveStroke, pg: PageData, canvas: HTMLCanvasElement, cssW: number, cssH: number, dpr: number) {
     const ctx = canvas.getContext('2d')
     if (!ctx) return
-    this.stroke = { tool: stroke.tool, color: stroke.color, w: stroke.w, tip: stroke.tip, sp: stroke.sp }
+    this.stroke = { ...stroke }
     this.pg = pg
     this.canvas = canvas
     this.ctx = ctx

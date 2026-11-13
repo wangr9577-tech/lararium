@@ -16,10 +16,8 @@ from __future__ import annotations
 
 import os
 import re
-import shutil
 import sqlite3
 import subprocess
-import sys
 import uuid
 import json
 from datetime import datetime
@@ -30,7 +28,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
-from .. import config, trashbin, vault
+from .. import config, external_tools, trashbin, vault
 from ..auth import get_current
 from ..db import db
 from ..upload import read_upload
@@ -399,7 +397,7 @@ def _rewrite_folder_prefix(module: str, old_prefix: str, new_prefix: str) -> int
     """把 module 下子树（folder==old_prefix 或其子路径）的笔记 folder 批量改写为新前缀。
     new_prefix=''=全部回未分类（移除 folder 字段）；子目录下笔记保留后缀路径（A/B → Z/B）。"""
     if not vault.has_dek():
-        raise HTTPException(423, "数据未解锁，请重新登录后重试")
+        raise HTTPException(423, "数据未解锁，请重启本机服务后重试")
     changed = 0
     for p in NOTES_DIR.glob("*.md"):
         try:
@@ -492,7 +490,7 @@ def rename_folder(body: FolderRenameIn, _user: dict = Depends(get_current)):
     # 目录行 DB 写入会先提交，笔记文件重写在后（文件无法进事务）：
     # 锁定态必须前置 423，杜绝「目录已改名、笔记未跟随」的不一致
     if not vault.has_dek():
-        raise HTTPException(423, "数据未解锁，请重新登录后重试")
+        raise HTTPException(423, "数据未解锁，请重启本机服务后重试")
     new_name = _clean_folder_name(body.new_name)
     # 新前端传全路径；旧前端只传 name（顶层目录名=全路径），兼容
     old_path = clean_folder_path(body.path or body.name)
@@ -540,7 +538,7 @@ def delete_folder(module: str = "", path: str = "", name: str = "",
     _check_module(module)
     # 同 rename_folder：锁定态前置 423，避免目录行先删、笔记未回未分类的不一致
     if not vault.has_dek():
-        raise HTTPException(423, "数据未解锁，请重新登录后重试")
+        raise HTTPException(423, "数据未解锁，请重启本机服务后重试")
     target = clean_folder_path(path or name)
     if not target:
         raise HTTPException(400, "缺少目录标识")
@@ -652,7 +650,7 @@ def delete_note(note_id: str, _user: dict = Depends(get_current)):
     return {"ok": True, "deleted_subpages": subs, "trash_id": tid}
 
 
-# ---------- 站内图片（粘贴/拖拽上传，AES 加密落盘，需登录读取） ----------
+# ---------- 站内图片（粘贴/拖拽上传，AES 加密落盘，需本机会话读取） ----------
 
 @router.post("/images", status_code=201)
 async def upload_image(request: Request, file: UploadFile = File(...), _user: dict = Depends(get_current)):
@@ -683,17 +681,7 @@ def get_image(name: str, _user: dict = Depends(get_current)):
 # ---------- md -> PDF（pandoc + xelatex/TinyTeX，均用户级安装，无需 sudo） ----------
 
 def _pandoc() -> str | None:
-    p = os.environ.get("KRUSKAL_PANDOC")
-    if p and Path(p).is_file():
-        return p
-    cand = Path(sys.executable).parent / "pandoc"
-    if cand.is_file():
-        return str(cand)
-    return shutil.which("pandoc")
-
-
-def _tinytex_bin() -> Path:
-    return Path.home() / ".TinyTeX" / "bin" / "x86_64-linux"
+    return external_tools.pandoc()
 
 
 @router.get("/{note_id}/export", summary="导出 PDF（pandoc + xelatex）")
@@ -706,15 +694,15 @@ def export_pdf(note_id: str, _user: dict = Depends(get_current)):
     pandoc = _pandoc()
     if not pandoc:
         raise HTTPException(503, "pandoc 未安装：conda install -n site -c conda-forge pandoc")
-    tiny = _tinytex_bin()
-    if not (tiny / "xelatex").is_file():
-        raise HTTPException(503, "未找到 TinyTeX 的 xelatex（预期 ~/.TinyTeX/bin/x86_64-linux/xelatex）")
+    xelatex = external_tools.xelatex()
+    if not xelatex:
+        raise HTTPException(503, "未找到 xelatex，请安装 TeX 或通过 KRUSKAL_XELATEX 指定程序路径")
 
     config.TMP_DIR.mkdir(parents=True, exist_ok=True)
     stem = f"note-{note_id}-{uuid.uuid4().hex[:6]}"
     src = config.TMP_DIR / f"{stem}.md"
     out = config.TMP_DIR / f"{stem}.pdf"
-    env = {**os.environ, "PATH": f"{Path(pandoc).parent}:{tiny}:{os.environ.get('PATH', '')}"}
+    env = {**os.environ, "PATH": os.pathsep.join((str(Path(pandoc).parent), str(Path(xelatex).parent), os.environ.get('PATH', '')))}
     images_to_clean: list[Path] = []
     try:
         # 标题仅用于 PDF 封面元数据（title 过长/含换行需清理）
@@ -735,7 +723,7 @@ def export_pdf(note_id: str, _user: dict = Depends(get_current)):
         src.write_text(body, encoding="utf-8")
         cmd = [
             pandoc, str(src), "-o", str(out),
-            "--pdf-engine=xelatex",
+            f"--pdf-engine={xelatex}",
             "-f", "markdown+tex_math_dollars-raw_tex",  # 关掉原始 TeX 透传，防 \input 读任意文件
             "-V", "lang=zh-CN",
             "-V", f"CJKmainfont=Noto Serif CJK SC",

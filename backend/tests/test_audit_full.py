@@ -8,7 +8,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "backend"))
 
 from backend.tests.test_env import TestEnvironment
-from app import config, vault
+from app import vault
 
 env = TestEnvironment(prefix="kruskal_audit_full_")
 client = env.client
@@ -27,14 +27,12 @@ def test_full_audit():
     print("开始全面审查 Kruskal 智能助手所有功能与安全边界")
     print("=" * 60)
 
-    # 1. 登录与解锁
-    admin_pw = env.admin_pw
-    assert admin_pw, "未能获取初始密码"
-    resp = client.post("/api/auth/login", json={"username": config.ADMIN_USERNAME, "password": admin_pw})
-    assert resp.status_code == 200, f"登录失败: {resp.text}"
-    token = resp.json()["token"]
+    # 1. 本机会话与数据密钥
+    token = env.token
+    assert token, "未能建立本机会话"
     headers = {"Authorization": f"Bearer {token}"}
-    print("[AUDIT 1/9] 登录与 DEK 内存解锁机制 -> 验证通过")
+    assert vault.has_dek(), "本机会话应已解锁数据密钥"
+    print("[AUDIT 1/9] 本机会话与 DEK 内存解锁机制 -> 验证通过")
 
     # 2. 检查初始状态（无 mock 数据污染）
     r_list = client.get("/api/assistant/records?scope=all", headers=headers)
@@ -153,14 +151,15 @@ def test_full_audit():
     assert "2026-11-25" in chat_resp["answer"] or "2026-11-20" in chat_resp["answer"]
     print("[AUDIT 8/9] 助手事实库检索与有据问答接口响应 -> 验证通过")
 
-    # 9. 上锁安全防御与解锁恢复
-    client.post("/api/auth/lock", headers=headers)
+    # 9. 数据密钥缺失时保护加密资源，恢复后继续可用
+    saved_dek = vault.dek()
+    vault.clear_dek()
     assert not vault.has_dek()
-    # 重新登录解锁
-    r_relogin = client.post("/api/auth/login", json={"username": config.ADMIN_USERNAME, "password": admin_pw})
-    assert r_relogin.status_code == 200
+    assert client.get("/api/assets/scan", headers=headers).status_code == 423
+    vault.set_dek(saved_dek)
     assert vault.has_dek()
-    print("[AUDIT 9/9] 上锁清除 DEK 与重新登录解锁恢复闭环 -> 验证通过")
+    assert client.get("/api/assets/scan", headers=headers).status_code == 200
+    print("[AUDIT 9/9] DEK 缺失时加密资源被拦截、恢复后可继续访问 -> 验证通过")
 
     print("\n" + "=" * 60)
     print("【审查结果】全部 9 大维度核心功能与安全边界 100% 审查通过！")

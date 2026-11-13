@@ -42,7 +42,7 @@ def _index() -> dict:
         except Exception as exc:
             # 读失败绝不静默当空表——否则下一次写回即抹掉全部相册记录（原图成孤儿目录）
             raise HTTPException(
-                503, "相册索引读取失败（数据未解锁或文件损坏），已阻止写入以防丢失相册记录，请重新登录后重试") from exc
+                503, "相册索引读取失败（数据未解锁或文件损坏），已阻止写入以防丢失相册记录，请重启本机服务后重试") from exc
     return {"albums": []}
 
 

@@ -18,6 +18,7 @@ from pydantic import BaseModel, Field
 from .. import config, trashbin, vault
 from ..auth import get_current
 from ..db import db
+from ..services import llm, paper_translate
 from ..upload import read_upload
 from .settings import _load as _load_settings
 
@@ -61,7 +62,8 @@ def _list_all() -> list[dict]:
             m = vault.read_json(p)
         except Exception:
             continue
-        out.append({**m, "id": p.stem})
+        pid = p.stem
+        out.append({**m, "id": pid, "trans_state": paper_translate.state_of(pid)})
     return out
 
 
@@ -112,11 +114,13 @@ async def upload_paper(
     tags: str = Form(default=""),
     category: str = Form(default=""),
     subcategory: str = Form(default=""),
+    auto_translate: str = Form(default="1"),
     _user: dict = Depends(get_current),
 ):
     if len(files) > 30:
         raise HTTPException(400, "一次最多上传 30 篇")
     tags_list = [t.strip() for t in tags.replace("，", ",").split(",") if t.strip()][:10]
+    want_translate = str(auto_translate).lower() not in ("0", "false", "no", "off", "")
     created = []
     for f in files:
         raw = await read_upload(f, MAX_UPLOAD, too_big=f"{f.filename} 超过 {MAX_UPLOAD // (1 << 20)}MB 上限")
@@ -137,7 +141,15 @@ async def upload_paper(
         vault.write_json(_meta_path(id_), meta)
         vault.write_json(_hl_path(id_), {"items": []})
         created.append({"id": id_, **meta})
-    return {"items": created}
+    # 上传即排队翻译：不用等到打开论文时才开始（慢慢排在后台，打开时通常已就绪）。
+    # 翻译失败绝不影响上传结果，逐个隔离异常。
+    if want_translate:
+        for item in created:
+            try:
+                paper_translate.start(item["id"])
+            except Exception:
+                pass
+    return {"items": [{**c, "trans_state": paper_translate.state_of(c["id"])} for c in created]}
 
 
 @router.get("/categories")
@@ -185,6 +197,62 @@ def paper_file(paper_id: str, _user: dict = Depends(get_current)):
         raise HTTPException(404, "论文不存在")
     data = vault.read_bytes(p)
     return Response(content=data, media_type="application/pdf")
+
+
+# ---------------------------------------------------------------- 中文翻译
+
+class TranslateIn(BaseModel):
+    force: bool = False
+
+
+@router.get("/{paper_id}/translation")
+def get_translation(paper_id: str, _user: dict = Depends(get_current)):
+    """译文状态：none / queued / running / ready / failed（含页数进度与失败原因）。"""
+    if not _meta_path(paper_id).is_file():
+        raise HTTPException(404, "论文不存在")
+    st = paper_translate.read_status(paper_id)
+    st["ai_enabled"] = llm.is_enabled()
+    st["queue_depth"] = paper_translate.queued_count()
+    return st
+
+
+@router.post("/{paper_id}/translation", status_code=202)
+def start_translation(paper_id: str, body: TranslateIn | None = None,
+                      _user: dict = Depends(get_current)):
+    """按需翻译（后台线程）：已有译文且未 force 时直接返回 ready。"""
+    if not _meta_path(paper_id).is_file():
+        raise HTTPException(404, "论文不存在")
+    if not _pdf_path(paper_id).is_file():
+        raise HTTPException(404, "这篇论文还没有 PDF 原文")
+    if not llm.is_enabled():
+        raise HTTPException(503, "AI 服务未启用：请先在「设置」里配置并打开模型")
+    try:
+        return paper_translate.start(paper_id, force=bool(body and body.force))
+    except RuntimeError as e:
+        raise HTTPException(503, str(e)) from e
+
+
+@router.post("/{paper_id}/translation/cancel")
+def cancel_translation(paper_id: str, _user: dict = Depends(get_current)):
+    """请求停止翻译（当前页译完即停，不落半成品译文）。"""
+    if not _meta_path(paper_id).is_file():
+        raise HTTPException(404, "论文不存在")
+    paper_translate.cancel(paper_id)
+    return {**paper_translate.read_status(paper_id), "cancelling": True}
+
+
+@router.get("/{paper_id}/translation/file")
+def translation_file(paper_id: str, _user: dict = Depends(get_current)):
+    data = paper_translate.read_pdf(paper_id)
+    if data is None:
+        raise HTTPException(404, "还没有中文译文")
+    return Response(content=data, media_type="application/pdf")
+
+
+@router.delete("/{paper_id}/translation")
+def delete_translation(paper_id: str, _user: dict = Depends(get_current)):
+    paper_translate.remove(paper_id)
+    return {"ok": True}
 
 
 @router.get("/{paper_id}/highlights")
@@ -314,6 +382,9 @@ def delete_paper(paper_id: str, _user: dict = Depends(get_current)):
     victims = [p for p in (_pdf_path(paper_id), _meta_path(paper_id), _hl_path(paper_id)) if p.is_file()]
     if not victims:
         raise HTTPException(404, "论文不存在")
+    tmeta, tpdf = paper_translate.paths(paper_id)
+    victims += [p for p in (tmeta, tpdf) if p.is_file()]
     m = _load_meta(paper_id) or {}
     tid = trashbin.move_to_trash(victims, module="paper", label=m.get("title") or "论文")
+    paper_translate.remove(paper_id)
     return {"ok": True, "trash_id": tid}

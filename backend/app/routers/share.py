@@ -1,6 +1,6 @@
 """只读分享：把笔记/个人主页渲染为独立 HTML 快照对外发布。
 
-设计：正文加密（DEK 仅在登录后驻内存），因此"公开副本"在分享时刻由站长生成
+设计：正文加密（DEK 在启动解锁后驻内存），因此"公开副本"在分享时刻由站长生成
 快照保存（明文 html，即显式公开的内容），公开链接免登录直接访问；撤销 = 删除快照。
 
 存储：
@@ -15,7 +15,6 @@ import json
 import re
 import secrets
 import subprocess
-import sys
 from datetime import datetime
 from pathlib import Path
 
@@ -88,7 +87,7 @@ def _map() -> dict:
         except Exception as exc:
             # 读失败绝不静默当空表——否则下一次写回即丢掉全部分享记录（快照成孤儿且无法撤销）
             raise HTTPException(
-                503, "分享索引读取失败（数据未解锁或文件损坏），已阻止写入以防丢失分享记录，请重新登录后重试") from exc
+                503, "分享索引读取失败（数据未解锁或文件损坏），已阻止写入以防丢失分享记录，请重启本机服务后重试") from exc
     return {}
 
 
@@ -98,11 +97,8 @@ def _save_map(m: dict) -> None:
 
 
 def _pandoc() -> str | None:
-    cand = Path(sys.executable).parent / "pandoc"
-    if cand.is_file():
-        return str(cand)
-    import shutil
-    return shutil.which("pandoc")
+    from ..external_tools import pandoc
+    return pandoc()
 
 
 def _md_to_html(md_text: str) -> str:

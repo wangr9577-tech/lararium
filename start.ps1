@@ -5,7 +5,6 @@ $PSScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Definition
 Set-Location $PSScriptRoot
 
 $env:KRUSKAL_HOST = "127.0.0.1"
-$env:KRUSKAL_LOCAL_NO_PASSWORD = "1"
 $env:KRUSKAL_PORT = "18080"
 $env:PYTHONIOENCODING = "utf-8"
 

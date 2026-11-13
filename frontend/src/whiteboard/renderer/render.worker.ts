@@ -46,7 +46,8 @@
  */
 
 import { getStroke } from 'perfect-freehand'
-import type { Tool, TipKey } from '../types'
+import { strokeAlpha } from '../types'
+import type { Tool, TipKey, StrokeV3 } from '../types'
 import { strokeOptsPage } from './StrokePathCache'
 
 /* ---------------- 消息协议类型 ---------------- */
@@ -60,6 +61,9 @@ export interface WStroke {
   w: number
   tip?: TipKey
   sp?: boolean
+  bv?: 1
+  sensitivity?: number
+  opacity?: number
   pts: { x: number; y: number; p: number }[]
 }
 
@@ -143,7 +147,7 @@ function handleRebuildInk(msg: RebuildInkRequest): void {
       const points: [number, number, number][] = stroke.pts.map(
         (p) => [p.x * page.w, p.y * page.h, p.p],
       )
-      const opts = strokeOptsPage(stroke, false, page.w)
+      const opts = strokeOptsPage(stroke, stroke.bv === 1, page.w)
       const outline = getStroke(points, opts as any)
       if (!outline.length) continue
       // 中点法 Path2D（与组件 drawOne 一致）
@@ -156,7 +160,7 @@ function handleRebuildInk(msg: RebuildInkRequest): void {
         path.quadraticCurveTo(x1, y1, (x1 + x2) / 2, (y1 + y2) / 2)
       }
       path.closePath()
-      ctx.globalAlpha = stroke.tool === 'hl' ? 0.32 : stroke.tip === 'marker' ? 0.92 : 1
+      ctx.globalAlpha = strokeAlpha(stroke as StrokeV3)
       ctx.fillStyle = stroke.color
       ctx.fill(path)
       ctx.globalAlpha = 1

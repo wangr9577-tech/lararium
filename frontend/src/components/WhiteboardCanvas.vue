@@ -73,6 +73,19 @@
         ><span>{{ w.key }}</span></button>
       </div>
 
+      <details v-if="tool === 'pen'" class="tool-menu brush-menu">
+        <summary>笔触设置</summary>
+        <div class="menu-panel brush-panel">
+          <label>压感 <output>{{ Math.round(sensitivity * 100) }}%</output><input v-model.number="sensitivity" type="range" min="0" max="1" step="0.05" aria-label="压感" /></label>
+          <label>出墨量 <output>{{ Math.round(inkOpacity * 100) }}%</output><input v-model.number="inkOpacity" type="range" min="0.1" max="1" step="0.05" aria-label="出墨量" /></label>
+          <label title="鼠标或无压感输入时，速度越快笔迹越细">速度影响 <output>{{ Math.round(speedEffect * 100) }}%</output><input v-model.number="speedEffect" type="range" min="0" max="1" step="0.05" aria-label="速度影响" /></label>
+          <button class="rb reset-brush" @click="resetBrushSettings">恢复默认</button>
+        </div>
+      </details>
+
+      <details class="tool-menu">
+        <summary>页面与视图</summary>
+        <div class="menu-panel page-panel">
       <!-- 页面 -->
       <div class="rs" />
       <div class="rg"><span class="gl">页面 {{ curIdx + 1 }}/{{ pages.length }}</span>
@@ -134,6 +147,8 @@
       <label class="touch-toggle" title="默认：触控笔书写、手指平移缩放；开启后可手指直接书写（双指仍可缩放）">
         <input type="checkbox" v-model="allowTouch" /><span>手指书写</span>
       </label>
+        </div>
+      </details>
       <input ref="filePick" type="file" accept="image/*" multiple class="hidden-picker" @change="onFilePick" />
     </div>
 
@@ -174,7 +189,6 @@
         <button :class="{ dis: curIdx >= pages.length - 1 }" @click="goPage(curIdx + 1)">下一页</button>
       </div>
       <div v-if="!readonly" class="wb-foot">
-        <span class="f1">停笔后约 1.5 秒自动保存 · 连续滚动，可直接在任意页书写</span>
         <span class="f2">{{ penNow }}</span>
       </div>
     </div>
@@ -182,14 +196,15 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { getStroke } from 'perfect-freehand'
-import { USE_LAYERED_RENDERER, USE_WORKER_INK_REBUILD, newStrokeId, DPR_ACTIVE } from '../whiteboard/types'
+import { USE_LAYERED_RENDERER, USE_WORKER_INK_REBUILD, newStrokeId, DPR_ACTIVE, strokeAlpha } from '../whiteboard/types'
 import { parsePayload as wbParsePayload, serialize as wbSerialize } from '../whiteboard/payload'
 import { StrokeBuffer } from '../whiteboard/input/StrokeBuffer'
 import { LiveInkRenderer, drawEraserRing, drawImgBox as wbDrawImgBox } from '../whiteboard/renderer/LiveInkRenderer'
 import { LayeredPageRenderer } from '../whiteboard/renderer/LayeredPageRenderer'
+import { strokeOptsPage } from '../whiteboard/renderer/StrokePathCache'
 import { InkPerfMonitor } from '../whiteboard/perf/InkPerfMonitor'
 
 /* ---------------- 类型与常量 ---------------- */
@@ -207,6 +222,9 @@ interface Stroke {
   w: number
   tip?: TipKey
   sp?: boolean
+  bv?: 1
+  sensitivity?: number
+  opacity?: number
   pts: Pt[]
 }
 /** 图片：x/y/w 为纸面宽的比例；r = 像素高/宽（保持原始宽高比） */
@@ -227,7 +245,7 @@ const RATIOS = {
 type RatioKey = keyof typeof RATIOS
 
 const tools: { key: Tool; label: string; tip: string }[] = [
-  { key: 'pen', label: '钢笔', tip: '触控笔压感书写' },
+  { key: 'pen', label: '画笔', tip: '选择笔尖书写' },
   { key: 'hl', label: '荧光笔', tip: '半透明宽幅标记' },
   { key: 'eraser', label: '橡皮', tip: '局部擦除或整笔删除（仅笔迹）' },
   { key: 'select', label: '选择', tip: '移动 / 缩放 / 删除图片' },
@@ -295,6 +313,19 @@ const color = ref(PEN_COLORS[0])
 const customHex = ref('#f97316')
 const widthIdx = ref(1)
 const allowTouch = ref(false)
+const sensitivity = ref(0.55)
+const inkOpacity = ref(1)
+const speedEffect = ref(0.5)
+try {
+  const settings = JSON.parse(localStorage.getItem('kruskal-ink-settings') || '{}')
+  if (Number.isFinite(settings.sensitivity)) sensitivity.value = Math.max(0, Math.min(1, settings.sensitivity))
+  if (Number.isFinite(settings.opacity)) inkOpacity.value = Math.max(0.1, Math.min(1, settings.opacity))
+  if (Number.isFinite(settings.speed)) speedEffect.value = Math.max(0, Math.min(1, settings.speed))
+} catch { /* use defaults */ }
+watch([sensitivity, inkOpacity, speedEffect], () => {
+  try { localStorage.setItem('kruskal-ink-settings', JSON.stringify({ sensitivity: sensitivity.value, opacity: inkOpacity.value, speed: speedEffect.value })) } catch { /* optional preference */ }
+})
+function resetBrushSettings() { sensitivity.value = 0.55; inkOpacity.value = 1; speedEffect.value = 0.5 }
 
 const pages = ref<PageData[]>([])
 const curIdx = ref(0)
@@ -311,6 +342,10 @@ const imgLoadQueue = new Set<string>()
 
 let rafId = 0
 let lastKind: string = 'mouse'
+let velocityPoint: { x: number; y: number; t: number; pressure: number } | null = null
+let activeSensitivity = 0.55
+let activeOpacity = 1
+let activeSpeedEffect = 0.5
 let hoverPos: { x: number; y: number } | null = null
 /** 当前拥有书写/擦除手势的指针；避免其他指针误结束笔迹 */
 let inkPointerId: number | null = null
@@ -1006,22 +1041,7 @@ function drawPaper(ctx: CanvasRenderingContext2D, w: number, h: number, paper: {
 /* ---------------- 笔迹渲染 ---------------- */
 
 function strokeOpts(stroke: Stroke, last: boolean) {
-  const size = Math.max(1, stroke.w * cssW)
-  if (stroke.tool === 'hl') {
-    return { size: size * 3.2, thinning: 0, smoothing: 0.55, streamline: 0.45,
-      simulatePressure: true, last, start: { cap: true }, end: { cap: true } }
-  }
-  const tip = stroke.tip || 'pen'
-  if (tip === 'ball') {
-    return { size, thinning: 0.12, smoothing: 0.5, streamline: 0.42,
-      simulatePressure: true, last }
-  }
-  if (tip === 'marker') {
-    return { size: size * 2.4, thinning: 0, smoothing: 0.5, streamline: 0.5,
-      simulatePressure: true, last, start: { cap: true }, end: { cap: true } }
-  }
-  return { size, thinning: 0.55, smoothing: 0.5, streamline: 0.5,
-    simulatePressure: stroke.sp === true, last, end: { taper: 0.4 } }
+  return strokeOptsPage(stroke, stroke.bv === 1 || last, cssW)
 }
 
 function drawOne(stroke: Stroke, last: boolean, ctxOverride?: CanvasRenderingContext2D) {
@@ -1039,7 +1059,7 @@ function drawOne(stroke: Stroke, last: boolean, ctxOverride?: CanvasRenderingCon
     path.quadraticCurveTo(x1, y1, (x1 + x2) / 2, (y1 + y2) / 2)
   }
   path.closePath()
-  ctx2d.globalAlpha = stroke.tool === 'hl' ? 0.32 : stroke.tip === 'marker' ? 0.92 : 1
+  ctx2d.globalAlpha = strokeAlpha(stroke as any)
   ctx2d.fillStyle = stroke.color
   ctx2d.fill(path)
   ctx2d.globalAlpha = 1
@@ -1347,7 +1367,7 @@ function paint(i: number, live = false) {
     }
     drawOne(liveStroke, true)
   }
-  if (live && tool.value === 'eraser' && hoverPos && !eraseBusy) {
+  if (live && tool.value === 'eraser' && hoverPos) {
     ctx2d.strokeStyle = 'rgba(220,38,38,.55)'
     ctx2d.lineWidth = 1.5
     ctx2d.beginPath()
@@ -1387,6 +1407,9 @@ function scheduleRedraw() {
  *  （重新注册会重置 runtime，调用方需随后 resize+paint 重建） */
 function setLayerEl(i: number, layer: 'static' | 'ink' | 'live', el: HTMLCanvasElement | null) {
   if (!layerEls[i]) layerEls[i] = { static: null, ink: null, live: null }
+  // Vue may invoke function refs again on any component update. Re-registering
+  // the same canvases resets their renderer dimensions and breaks repainting.
+  if (layerEls[i][layer] === el) return
   layerEls[i][layer] = el
   const s = layerEls[i]
   if (s.static && s.ink) renderer?.registerPage(i, { static: s.static, ink: s.ink, live: s.live })
@@ -1499,7 +1522,7 @@ function drawLiveOverlay() {
     }
     return
   }
-  if (tool.value === 'eraser' && hoverPos && !eraseBusy) {
+  if (tool.value === 'eraser' && hoverPos) {
     drawEraserRing(canvas, dpr, hoverPos.x, hoverPos.y, eraserR())
     return
   }
@@ -1536,39 +1559,76 @@ function beginInkStroke(p: { x: number; y: number }, pressure: number, kind: str
   renderer.paintStatic(i)
   renderer.paintInk(i)
   lastKind = kind
+  activeSensitivity = sensitivity.value
+  activeOpacity = inkOpacity.value
+  activeSpeedEffect = speedEffect.value
+  velocityPoint = null
   buffer.begin(p.x / w, p.y / h, pressure)
   liveInk.begin(
-    { tool: tool.value, color: color.value, w: widthFrac(), tip: tool.value === 'pen' ? tipKey.value : undefined, sp: tool.value === 'pen' && lastKind !== 'pen' },
+    { tool: tool.value, color: color.value, w: widthFrac(), tip: tool.value === 'pen' ? tipKey.value : undefined, sp: false, bv: 1, sensitivity: tool.value === 'pen' ? activeSensitivity : undefined, opacity: tool.value === 'pen' ? activeOpacity : undefined },
     pg as any, layerEls[i].live, w, h, liveDpr(),
   )
+  liveInk.push(p.x / w, p.y / h, pressure)
   lastInputTs = performance.now()
   perf?.noteInput(lastInputTs)
   drawing.value = true
+  scheduleRedraw()
 }
 
-/** LAYERED 移动加点：归一化采样进 buffer + 湿墨层（<1px 去抖） */
-function pushInkPoint(p: { x: number; y: number }, pressure: number) {
+/** 保留细小位移或压感变化，只丢弃重复采样。 */
+function pushInkPoint(p: { x: number; y: number }, pressure: number, final = false) {
   if (!LAYERED) return
   const i = curIdx.value
   const w = sheetW.value
   const h = pageCssH(i)
   const last = buffer.last()
-  if (last && Math.hypot(p.x - last.x * w, p.y - last.y * h) < 1) return
+  if (last && Math.hypot(p.x - last.x * w, p.y - last.y * h) <= (final ? 0.00001 : 0.05) && Math.abs(last.p - pressure) < 0.001) return
   const nx = p.x / w
   const ny = p.y / h
   buffer.push(nx, ny, pressure)
   liveInk.push(nx, ny, pressure)
   lastInputTs = performance.now()
   perf?.noteInput(lastInputTs)
-  followPen(p.y)
   scheduleRedraw()
+}
+
+/** Consume real coalesced samples in order. Predicted points are never persisted. */
+function pushPointerSamples(e: PointerEvent, final = false) {
+  const rect = hitEl(curIdx.value)?.getBoundingClientRect()
+  if (!rect) return
+  let samples: PointerEvent[] = []
+  if (!final && typeof e.getCoalescedEvents === 'function') {
+    try { samples = e.getCoalescedEvents() } catch { /* unsupported */ }
+  }
+  // Some implementations omit the dispatched event from the returned samples.
+  const tail = samples[samples.length - 1]
+  if (!tail || tail.clientX !== e.clientX || tail.clientY !== e.clientY || tail.pressure !== e.pressure) samples = [...samples, e]
+  let lastY = 0
+  for (const sample of samples) {
+    const p = { x: sample.clientX - rect.left, y: sample.clientY - rect.top }
+    let pressure = final ? (buffer.last()?.p ?? 0.5)
+      : sample.pointerType === 'pen' && Number.isFinite(sample.pressure) ? Math.max(0, Math.min(1, sample.pressure)) : 0.5
+    if (!final && sample.pointerType !== 'pen' && tool.value === 'pen' && tipKey.value === 'pen') {
+      const prev = velocityPoint
+      if (prev) {
+        const dt = Math.max(1, sample.timeStamp - prev.t)
+        const speed = Math.min(1, Math.hypot(p.x - prev.x, p.y - prev.y) / dt / 2)
+        const target = 0.5 + (0.35 - 0.7 * speed) * activeSpeedEffect
+        pressure = prev.pressure * 0.55 + target * 0.45
+      }
+      velocityPoint = { x: p.x, y: p.y, t: sample.timeStamp, pressure }
+    }
+    pushInkPoint(p, pressure, final)
+    lastY = p.y
+  }
+  if (!final && samples.length) followPen(lastY)
 }
 
 /** LAYERED 落笔提交：构建带 id 的 v3 笔迹 → 增量提交 ink 层 → 清湿墨层 */
 function commitInkStroke() {
   drawing.value = false
   const pg = curPage.value
-  if (!pg || buffer.length < 2) {
+  if (!pg || buffer.length < 1) {
     buffer.reset()
     liveInk.clearAll()
     liveInk.end()
@@ -1580,7 +1640,10 @@ function commitInkStroke() {
     tool: tool.value,
     color: color.value,
     tip: tool.value === 'pen' ? tipKey.value : undefined,
-    sp: tool.value === 'pen' && lastKind !== 'pen',
+    sp: false,
+    bv: 1,
+    sensitivity: tool.value === 'pen' ? activeSensitivity : undefined,
+    opacity: tool.value === 'pen' ? activeOpacity : undefined,
     w: widthFrac(),
     pts: buffer.toSamples().map((s) => ({ ...s, x: Math.round(s.x * 10000) / 10000, y: Math.round(s.y * 10000) / 10000, p: Math.round(s.p * 100) / 100 })),
   }
@@ -1706,7 +1769,7 @@ function onDown(e: PointerEvent) {
   }
   if (LAYERED) {
     hoverPos = null
-    beginInkStroke(p, e.pressure && e.pointerType === 'pen' ? e.pressure : 0.5, e.pointerType || 'mouse')
+    beginInkStroke(p, e.pointerType === 'pen' && Number.isFinite(e.pressure) ? Math.max(0, Math.min(1, e.pressure)) : 0.5, e.pointerType || 'mouse')
     return
   }
   drawing.value = true
@@ -1749,8 +1812,8 @@ function onTouchDown(e: PointerEvent) {
     return
   }
 
-  // 默认单指平移；只读、选择工具也始终平移。
-  const wantInk = allowTouch.value && ptrs.size === 1 && tool.value !== 'select'
+  // 选择橡皮时单指直接擦除；其他工具仍遵循手指书写开关。
+  const wantInk = ptrs.size === 1 && (tool.value === 'eraser' || (allowTouch.value && tool.value !== 'select'))
   if (props.readonly || !wantInk) {
     touchPan = p
     return
@@ -1797,6 +1860,9 @@ function onMove(e: PointerEvent) {
     if (eraseBusy && lastErase) {
       applyEraseSegment(lastErase, p)
       lastErase = p
+      hoverPos = p
+      if (LAYERED) scheduleOverlay()
+      else scheduleRedraw()
     } else {
       hoverPos = p
       if (LAYERED) scheduleOverlay()
@@ -1806,7 +1872,7 @@ function onMove(e: PointerEvent) {
   }
   if (!drawing.value) return
   if (LAYERED) {
-    pushInkPoint(p, e.pressure && e.pointerType === 'pen' ? e.pressure : 0.5)
+    pushPointerSamples(e)
     return
   }
   const pts = cur.value
@@ -1864,9 +1930,12 @@ function onTouchMove(e: PointerEvent) {
     if (tool.value === 'eraser' && eraseBusy && lastErase) {
       applyEraseSegment(lastErase, lp)
       lastErase = lp
+      hoverPos = lp
+      if (LAYERED) scheduleOverlay()
+      else scheduleRedraw()
     } else if (drawing.value && tool.value !== 'eraser' && tool.value !== 'select') {
       if (LAYERED) {
-        pushInkPoint(lp, 0.5)
+        pushPointerSamples(e)
       } else {
         const pts = cur.value
         const last = pts[pts.length - 1]
@@ -1898,7 +1967,13 @@ function onUp(e: PointerEvent) {
     ptrs.delete(e.pointerId)
     try { scrollEl.value?.releasePointerCapture(e.pointerId) } catch { /* ignore */ }
     if (wasInk) {
-      if (drawing.value) finishInkStroke()
+      if (drawing.value) {
+        if (e.type === 'pointercancel') abortInkGesture()
+        else {
+          if (LAYERED) pushPointerSamples(e, true)
+          finishInkStroke()
+        }
+      }
       else if (eraseBusy) endEraseGesture()
       inkPointerId = null
       inkPointerType = null
@@ -1939,7 +2014,11 @@ function onUp(e: PointerEvent) {
       else redraw()
     }
   } else if (drawing.value) {
-    finishInkStroke()
+    if (e.type === 'pointercancel') abortInkGesture()
+    else {
+      if (LAYERED) pushPointerSamples(e, true)
+      finishInkStroke()
+    }
   }
   if (inkPointerId === e.pointerId) {
     inkPointerId = null
@@ -1956,7 +2035,7 @@ function finishInkStroke() {
   drawing.value = false
   const pts = cur.value
   cur.value = []
-  if (pts.length < 2) return
+  if (pts.length < 1) return
   const pg = curPage.value
   if (!pg) return
   pushHist()
@@ -1965,6 +2044,7 @@ function finishInkStroke() {
     color: color.value,
     tip: tool.value === 'pen' ? tipKey.value : undefined,
     sp: tool.value === 'pen' && lastKind !== 'pen',
+    bv: 1,
     w: widthFrac(),
     pts: pts.map((p) => ({ x: Math.round(p.x / cssW * 10000) / 10000, y: Math.round(p.y / cssH * 10000) / 10000, p: Math.round(p.p * 100) / 100 })),
   })
@@ -1989,8 +2069,8 @@ function beginEraseGesture(p: { x: number; y: number }) {
   eraseBusy = true
   eraseChanged = false
   lastErase = p
-  pushHist()
-  hoverPos = null
+  hoverPos = p
+  if (LAYERED) scheduleOverlay()
   if (tool.value === 'eraser') applyEraseSegment(p, p)
 }
 
@@ -2009,8 +2089,6 @@ function endEraseGesture() {
     pushPayload()
     if (LAYERED) scheduleOverlay()
     else redraw()
-  } else {
-    undoStack.pop() // 没擦到任何东西：撤销快照
   }
 }
 
@@ -2027,8 +2105,9 @@ function applyEraseSegment(a: { x: number; y: number }, b: { x: number; y: numbe
       next.push(...cutStroke(s, a, b, r))
     }
   }
-  const changed = next.length !== pg.strokes.length || totalPts(next) !== totalPts(pg.strokes)
+  const changed = next.length !== pg.strokes.length || next.some((stroke, i) => stroke !== pg.strokes[i])
   if (!changed) return
+  if (!eraseChanged) pushHist()
   pg.strokes = next
   eraseChanged = true
   if (LAYERED) {
@@ -2037,12 +2116,6 @@ function applyEraseSegment(a: { x: number; y: number }, b: { x: number; y: numbe
   } else {
     scheduleRedraw()
   }
-}
-
-function totalPts(list: Stroke[]): number {
-  let n = 0
-  for (const s of list) n += s.pts.length
-  return n
 }
 
 function ptDistToSeg(p: { x: number; y: number }, a: { x: number; y: number }, b: { x: number; y: number }): number {
@@ -2075,6 +2148,7 @@ function segDistToSeg(ax: number, ay: number, bx: number, by: number,
 }
 
 function strokeHit(s: Stroke, a: { x: number; y: number }, b: { x: number; y: number }, r: number): boolean {
+  if (s.pts.length === 1) return ptDistToSeg({ x: s.pts[0].x * cssW, y: s.pts[0].y * cssH }, a, b) < r + s.w * cssW / 2
   const ax = a.x, ay = a.y, bx = b.x, by = b.y
   for (let i = 1; i < s.pts.length; i++) {
     const p1 = s.pts[i - 1], p2 = s.pts[i]
@@ -2084,33 +2158,71 @@ function strokeHit(s: Stroke, a: { x: number; y: number }, b: { x: number; y: nu
 }
 
 function cutStroke(s: Stroke, a: { x: number; y: number }, b: { x: number; y: number }, r: number): Stroke[] {
-  const n = s.pts.length
-  if (n < 2) return []
-  const ax = a.x, ay = a.y, bx = b.x, by = b.y
-  const keep = new Array<boolean>(n).fill(true)
-  for (let i = 0; i < n; i++) {
-    const px = s.pts[i].x * cssW, py = s.pts[i].y * cssH
-    if (ptDistToSeg({ x: px, y: py }, a, b) < r) keep[i] = false
-  }
-  for (let i = 1; i < n; i++) {
-    const p1 = s.pts[i - 1], p2 = s.pts[i]
-    if (segDistToSeg(p1.x * cssW, p1.y * cssH, p2.x * cssW, p2.y * cssH, ax, ay, bx, by) < r) {
-      keep[i - 1] = false
-      keep[i] = false
-    }
-  }
-  if (keep.every((k) => k)) return [s]
-  if (keep.every((k) => !k)) return []
+  const pts = s.pts
+  if (!strokeHit(s, a, b, r)) return [s]
+  if (pts.length === 1) return []
+
+  // 沿每条采样线段求橡皮扫过的胶囊形区域的边界，保留区域外的笔迹。
   const out: Stroke[] = []
   let run: Pt[] = []
   const flush = () => {
-    if (run.length >= 2) out.push({ ...s, pts: run.map((p) => ({ ...p })) })
+    if (run.length >= 2) out.push({ ...s, id: newStrokeId(), pts: run } as Stroke)
     run = []
   }
-  s.pts.forEach((pt, i) => {
-    if (keep[i]) run.push(pt)
-    else flush()
+  const interpolate = (p: Pt, q: Pt, t: number): Pt => ({
+    ...p, x: p.x + (q.x - p.x) * t, y: p.y + (q.y - p.y) * t,
+    p: p.p + (q.p - p.p) * t,
   })
+  const append = (p: Pt) => {
+    const last = run[run.length - 1]
+    if (!last || Math.hypot((last.x - p.x) * cssW, (last.y - p.y) * cssH) > 0.001) run.push(p)
+  }
+  for (let i = 1; i < pts.length; i++) {
+    const p = pts[i - 1], q = pts[i]
+    if (segDistToSeg(p.x * cssW, p.y * cssH, q.x * cssW, q.y * cssH, a.x, a.y, b.x, b.y) >= r) {
+      append(p)
+      append(q)
+      continue
+    }
+    const distance = (t: number) => ptDistToSeg({
+      x: (p.x + (q.x - p.x) * t) * cssW,
+      y: (p.y + (q.y - p.y) * t) * cssH,
+    }, a, b)
+    // 距离沿直线是凸函数，先找最低点，再二分两侧交点。
+    let lo = 0, hi = 1
+    for (let j = 0; j < 30; j++) {
+      const x = (2 * lo + hi) / 3, y = (lo + 2 * hi) / 3
+      if (distance(x) < distance(y)) hi = y
+      else lo = x
+    }
+    const mid = (lo + hi) / 2
+    if (distance(mid) >= r) {
+      append(p)
+      append(q)
+      continue
+    }
+    let left = 0, right = mid
+    if (distance(0) >= r) {
+      for (let j = 0; j < 25; j++) {
+        const t = (left + right) / 2
+        if (distance(t) >= r) left = t
+        else right = t
+      }
+      append(p)
+      append(interpolate(p, q, left))
+    }
+    flush()
+    left = mid; right = 1
+    if (distance(1) >= r) {
+      for (let j = 0; j < 25; j++) {
+        const t = (left + right) / 2
+        if (distance(t) < r) left = t
+        else right = t
+      }
+      append(interpolate(p, q, right))
+      append(q)
+    }
+  }
   flush()
   return out
 }
@@ -2315,19 +2427,18 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
-.wb { display: flex; gap: 10px; align-items: stretch; min-width: 0; }
+.wb { display: flex; flex-direction: column; gap: 8px; align-items: stretch; min-width: 0; }
 .wb.readonly { display: block; }
 
 /* ---------- 左侧竖排工具栏 ---------- */
 .wb-rail {
-  flex: none; width: 92px; max-height: calc(100vh - 210px); overflow-y: auto;
-  display: flex; flex-direction: column; gap: 6px;
-  padding: 10px 8px; border-radius: 14px;
+  flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+  padding: 6px 8px; border-radius: 12px; position: relative; z-index: 8;
   background: rgba(148, 163, 184, 0.08);
 }
-.rg { display: flex; flex-direction: column; gap: 4px; align-items: stretch; }
-.rs { flex: none; height: 1px; margin: 2px 4px; background: rgba(148, 163, 184, 0.25); }
-.gl { font-size: 11px; color: var(--txt3, #94a3b8); padding: 1px 4px 2px; letter-spacing: 1px; }
+.rg { display: flex; flex-direction: row; gap: 3px; align-items: center; }
+.rs { flex: none; width: 1px; height: 24px; margin: 0 2px; background: rgba(148, 163, 184, 0.25); }
+.gl { font-size: 11px; color: var(--txt3, #94a3b8); padding: 1px 3px; white-space: nowrap; }
 html.theme-dark .gl { color: #8b97ab; }
 .rb {
   border: none; cursor: pointer; font-family: inherit; font-size: 12.5px;
@@ -2342,9 +2453,9 @@ html.theme-dark .rb { color: #cbd5e1; }
 .rb.xs { font-size: 11px; padding: 4px 2px; }
 
 /* 颜色 */
-.sw { display: grid; grid-template-columns: repeat(2, 1fr); gap: 5px; padding: 2px; }
+.sw { display: flex; gap: 4px; padding: 2px; align-items: center; }
 .dot {
-  width: 100%; aspect-ratio: 1; border-radius: 8px; cursor: pointer;
+  display: block; width: 21px; height: 21px; flex: none; border-radius: 6px; cursor: pointer;
   border: 2px solid transparent; box-shadow: 0 0 0 1px rgba(148, 163, 184, 0.35);
 }
 .dot.on { border-color: #fff; box-shadow: 0 0 0 2px #8b5cf6; }
@@ -2370,6 +2481,21 @@ html.theme-dark .rb { color: #cbd5e1; }
 }
 html.theme-dark .touch-toggle { color: #94a3b8; }
 .touch-toggle input { accent-color: #8b5cf6; }
+
+.tool-menu { position: relative; }
+.tool-menu summary { list-style: none; cursor: pointer; border-radius: 8px; padding: 6px 9px; font-size: 12.5px; color: var(--txt2, #64748b); white-space: nowrap; }
+.tool-menu summary::-webkit-details-marker { display: none; }
+.tool-menu[open] summary, .tool-menu summary:hover { background: rgba(167, 139, 250, 0.2); }
+.menu-panel { position: absolute; top: calc(100% + 6px); left: 0; z-index: 20; width: 230px; padding: 12px; border-radius: 12px; background: var(--card, #fff); color: var(--txt1, #1e293b); box-shadow: 0 8px 28px rgba(30, 20, 80, 0.2); border: 1px solid rgba(148,163,184,.25); }
+.brush-panel label { display: grid; grid-template-columns: 1fr auto; gap: 5px; font-size: 12px; margin-bottom: 12px; }
+.brush-panel output { color: var(--txt2, #64748b); font-variant-numeric: tabular-nums; }
+.brush-panel input { grid-column: 1 / -1; width: 100%; accent-color: #8b5cf6; }
+.reset-brush { width: 100%; background: rgba(148,163,184,.12); }
+.page-panel { max-height: min(70vh, 550px); overflow-y: auto; }
+.page-panel .rg { flex-direction: column; align-items: stretch; }
+.page-panel .rs { width: auto; height: 1px; margin: 7px 0; }
+.page-panel .grid2.sqs { grid-template-columns: repeat(4, 1fr); }
+@media (max-width: 700px) { .menu-panel { position: fixed; top: auto; left: 12px; right: 12px; width: auto; max-height: 55vh; overflow: auto; } }
 
 /* ---------- 纸面：连续长卷（多页垂直堆叠，原生滚动） ---------- */
 .wb-stage { flex: 1; min-width: 0; display: flex; flex-direction: column; position: relative; }

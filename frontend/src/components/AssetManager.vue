@@ -453,7 +453,7 @@ async function runScan() {
     // 异步拉取前 20 张图片的缩略图
     loadThumbnails(res.unreferenced_files.concat(res.referenced_files))
   } catch (e: any) {
-    ElMessage.error(e?.response?.data?.detail || '体检扫描失败，请检查网络或重新登录')
+    ElMessage.error(e?.response?.data?.detail || '体检扫描失败，请检查网络后重试')
   } finally {
     scanning.value = false
   }

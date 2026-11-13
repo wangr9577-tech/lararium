@@ -5,7 +5,7 @@
 2. 日记今日足迹汇总（GET /api/diary/footprint）：日程、记账、笔记动态数据自动汇总与模板生成；
 3. 工作台资料反向链接（GET /api/workbench/links/backlinks）：事项与资料双向引用查询与元数据透传；
 4. 全局快速收录（POST /api/workbench/captures）：闪念内容、来源及链接极速入库与解密校验；
-5. 架构韧性安全测试：未登录 401、DEK 未注入 423 与一键上锁 401 防御闭环。
+5. 架构韧性安全测试：未登录 401、DEK 未注入 423 与会话令牌 401 与 DEK 锁定 423 防御。
 """
 from __future__ import annotations
 
@@ -268,20 +268,10 @@ def test_5_security_and_dek_lock_defense():
     assert vault.has_dek()
     assert client.get("/api/assets/scan", headers=headers).status_code == 200
 
-    # 5. 调用 /api/auth/lock 彻底锁定撤销 token
-    r_lock = client.post("/api/auth/lock", headers=headers)
-    assert r_lock.status_code == 200
-    assert not vault.has_dek()
-    # 撤销后再次携带原 token 访问敏感接口返回 401
-    assert client.get("/api/assets/scan", headers=headers).status_code == 401
-
-    # 6. 重新登录，恢复 Token 与 DEK
-    r_relogin = client.post(
-        "/api/auth/login",
-        json={"username": config.ADMIN_USERNAME, "password": env.admin_pw},
-    )
-    assert r_relogin.status_code == 200
-    assert vault.has_dek(), "重新登录后 DEK 必须成功注入"
+    # 5. 无效 token 一律拒绝：本机会话仍是 /api 的唯一通行证
+    assert client.get("/api/assets/scan", headers={"Authorization": "Bearer invalid-token"}).status_code == 401
+    assert client.get("/api/assets/scan").status_code == 401
+    assert client.get("/api/assets/scan", headers=headers).status_code == 200
 
 
 if __name__ == "__main__":

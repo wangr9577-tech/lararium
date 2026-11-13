@@ -20,7 +20,6 @@ sys.path.insert(0, str(REPO_ROOT / "backend"))
 from starlette.testclient import TestClient
 from backend.tests.test_env import TestEnvironment
 from app import config, crypto, db, trashbin, vault
-from app.auth import bootstrap_admin
 from app.db import init_db
 from app.main import app
 
@@ -37,9 +36,7 @@ def teardown_module():
 
 
 def test_assets_management_workflow():
-    # 1. 初始登录验证
-    admin_pw = env.admin_pw
-
+    # 1. 本机会话验证
     # 未认证访问被拦截
     r_unauth = client.get("/api/assets/scan")
     assert r_unauth.status_code == 401

@@ -1,13 +1,27 @@
 import axios from 'axios'
 
 export const TOKEN_KEY = 'krs_token'
-export const USER_KEY = 'krs_user'
 
 export const getToken = () => localStorage.getItem(TOKEN_KEY) || ''
 export const setToken = (t: string) => localStorage.setItem(TOKEN_KEY, t)
-export const clearToken = () => {
-  localStorage.removeItem(TOKEN_KEY)
-  localStorage.removeItem(USER_KEY)
+export const clearToken = () => localStorage.removeItem(TOKEN_KEY)
+
+/** 向本机后端换取会话 token（单机应用没有登录，启动时自动建立）。 */
+let sessionPending: Promise<boolean> | null = null
+export function ensureSession(): Promise<boolean> {
+  if (getToken()) return Promise.resolve(true)
+  if (!sessionPending) {
+    sessionPending = fetch('/api/auth/local-session', { method: 'POST' })
+      .then(async (r) => {
+        if (!r.ok) return false
+        const data = await r.json()
+        setToken(data.token)
+        return true
+      })
+      .catch(() => false)
+      .finally(() => { sessionPending = null })
+  }
+  return sessionPending
 }
 
 export const api = axios.create({ baseURL: '/api', timeout: 30000 })
@@ -21,14 +35,15 @@ api.interceptors.request.use((cfg) => {
 api.interceptors.response.use(
   (r) => r,
   (err) => {
-    const code = err.response?.status
-    if (code === 423) {
-      // 数据未解锁（服务重启后 DEK 仅在内存）：需重新登录解锁
+    // token 失效（如数据目录被替换）：重新换一张本机会话票再刷新一次，避免卡在空页
+    if (err.response?.status === 401) {
       clearToken()
-      if (location.pathname !== '/login') location.href = '/login?reason=relock'
-    } else if (code === 401 && location.pathname !== '/login') {
-      clearToken()
-      location.href = '/login'
+      const reloadKey = 'krs_session_reload'
+      const last = Number(sessionStorage.getItem(reloadKey) || 0)
+      if (Date.now() - last > 10000) {
+        sessionStorage.setItem(reloadKey, String(Date.now()))
+        ensureSession().then((ok) => { if (ok) location.reload() })
+      }
     }
     return Promise.reject(err)
   },

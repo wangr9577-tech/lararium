@@ -5,7 +5,8 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -30,6 +31,7 @@ def _row(r) -> dict:
         "id": r["id"], "date": r["date"], "kind": r["kind"], "type": r["type"],
         "title": r["title"], "time_start": r["time_start"], "note": r["note"],
         "done": bool(r["done"]), "created": r["created_at"],
+        "priority": r["priority"], "estimate_min": r["estimate_min"], "series_id": r["series_id"],
     }
 
 
@@ -40,6 +42,11 @@ class EntryIn(BaseModel):
     title: str = Field(min_length=1, max_length=200)
     time_start: str = Field(default="", max_length=5)
     note: str = Field(default="", max_length=500)
+    priority: str | None = None
+    estimate_min: int | None = Field(default=None, ge=1, le=1440)
+    repeat: str = "none"
+    repeat_until: str = ""
+    scope: str = "one"
 
 
 class DoneIn(BaseModel):
@@ -47,6 +54,10 @@ class DoneIn(BaseModel):
 
 
 def _validate(body: EntryIn) -> None:
+    if body.priority not in (None, "", "low", "medium", "high"):
+        raise HTTPException(400, "无效优先级")
+    if body.repeat not in ("none", "daily", "weekly") or body.scope not in ("one", "series"):
+        raise HTTPException(400, "无效重复设置")
     if body.kind not in KINDS:
         raise HTTPException(400, "kind 只能是 daily / monthly")
     if body.type not in TYPES:
@@ -112,16 +123,31 @@ def schedule_heatmap(year: int | None = None, _user: dict = Depends(get_current)
 @router.post("", status_code=201)
 def create_entry(body: EntryIn, _user: dict = Depends(get_current)):
     _validate(body)
+    dates = [body.date]
+    series_id = ""
+    if body.repeat != "none":
+        if body.kind != "daily":
+            raise HTTPException(400, "只有按日条目可以重复")
+        try:
+            first = datetime.strptime(body.date, "%Y-%m-%d")
+            last = datetime.strptime(body.repeat_until, "%Y-%m-%d")
+        except ValueError:
+            raise HTTPException(400, "请选择有效重复结束日期")
+        if last < first or (last - first).days > 730:
+            raise HTTPException(400, "重复结束日期须在开始日期后两年内")
+        step = 1 if body.repeat == "daily" else 7
+        dates = [(first + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(0, (last-first).days+1, step)]
+        series_id = uuid4().hex
     with db() as conn:
-        cur = conn.execute(
-            "INSERT INTO schedule(date, kind, type, title, time_start, note, done, sort, created_at) "
-            "VALUES(?,?,?,?,?,?,0,0,?)",
-            (body.date, body.kind, body.type, body.title.strip(), body.time_start.strip(),
-             body.note.strip(), _now()),
-        )
-        row = conn.execute("SELECT * FROM schedule WHERE id=?", (cur.lastrowid,)).fetchone()
+        first_id = None
+        for date in dates:
+            cur = conn.execute(
+                "INSERT INTO schedule(date, kind, type, title, time_start, note, done, sort, created_at, priority, estimate_min, series_id) VALUES(?,?,?,?,?,?,0,0,?,?,?,?)",
+                (date, body.kind, body.type, body.title.strip(), body.time_start.strip(), body.note.strip(), _now(), body.priority or "", body.estimate_min, series_id),
+            )
+            if first_id is None: first_id = cur.lastrowid
+        row = conn.execute("SELECT * FROM schedule WHERE id=?", (first_id,)).fetchone()
     return _row(row)
-
 
 @router.put("/{entry_id}")
 def update_entry(entry_id: int, body: EntryIn, _user: dict = Depends(get_current)):
@@ -130,13 +156,19 @@ def update_entry(entry_id: int, body: EntryIn, _user: dict = Depends(get_current
         row = conn.execute("SELECT * FROM schedule WHERE id=?", (entry_id,)).fetchone()
         if row is None:
             raise HTTPException(404, "条目不存在")
-        conn.execute(
-            "UPDATE schedule SET date=?, kind=?, type=?, title=?, time_start=?, note=? WHERE id=?",
-            (body.date, body.kind, body.type, body.title.strip(), body.time_start.strip(),
-             body.note.strip(), entry_id),
-        )
+        priority = row["priority"] if body.priority is None else body.priority
+        estimate = row["estimate_min"] if "estimate_min" not in body.model_fields_set else body.estimate_min
+        if body.scope == "series" and row["series_id"]:
+            conn.execute("UPDATE schedule SET type=?, title=?, time_start=?, note=?, priority=?, estimate_min=? WHERE series_id=?",
+                         (body.type, body.title.strip(), body.time_start.strip(), body.note.strip(), priority, estimate, row["series_id"]))
+        else:
+            conn.execute("UPDATE schedule SET date=?, kind=?, type=?, title=?, time_start=?, note=?, priority=?, estimate_min=? WHERE id=?",
+                         (body.date, body.kind, body.type, body.title.strip(), body.time_start.strip(), body.note.strip(), priority, estimate, entry_id))
         try:
-            conn.execute("UPDATE assistant_schedule_links SET locked_by_user=1 WHERE schedule_id=?", (entry_id,))
+            if body.scope == "series" and row["series_id"]:
+                conn.execute("UPDATE assistant_schedule_links SET locked_by_user=1 WHERE schedule_id IN (SELECT id FROM schedule WHERE series_id=?)", (row["series_id"],))
+            else:
+                conn.execute("UPDATE assistant_schedule_links SET locked_by_user=1 WHERE schedule_id=?", (entry_id,))
         except Exception:
             pass
         row = conn.execute("SELECT * FROM schedule WHERE id=?", (entry_id,)).fetchone()
@@ -159,14 +191,19 @@ def toggle_done(entry_id: int, body: DoneIn, _user: dict = Depends(get_current))
 
 
 @router.delete("/{entry_id}")
-def delete_entry(entry_id: int, _user: dict = Depends(get_current)):
+def delete_entry(entry_id: int, scope: str = "one", _user: dict = Depends(get_current)):
     with db() as conn:
+        row = conn.execute("SELECT series_id FROM schedule WHERE id=?", (entry_id,)).fetchone()
+        if row is None: raise HTTPException(404, "条目不存在")
+        ids = [r[0] for r in conn.execute("SELECT id FROM schedule WHERE series_id=?", (row["series_id"],)).fetchall()] if scope == "series" and row["series_id"] else [entry_id]
         try:
-            # 必须在删除 schedule 之前显式将关联记录标记为用户已移除，并将 schedule_id 置 NULL，防外键级联丢失标记
-            conn.execute("UPDATE assistant_schedule_links SET user_dismissed=1, schedule_id=NULL WHERE schedule_id=?", (entry_id,))
+            for sid in ids:
+                conn.execute("UPDATE assistant_schedule_links SET user_dismissed=1, schedule_id=NULL WHERE schedule_id=?", (sid,))
         except Exception:
             pass
-        cur = conn.execute("DELETE FROM schedule WHERE id=?", (entry_id,))
+        conn.execute("UPDATE focus SET schedule_id=NULL WHERE schedule_id IN (%s)" % ",".join("?" * len(ids)), ids)
+        cur = conn.execute("DELETE FROM schedule WHERE id IN (%s)" % ",".join("?" * len(ids)), ids)
     if cur.rowcount == 0:
         raise HTTPException(404, "条目不存在")
     return {"ok": True}
+

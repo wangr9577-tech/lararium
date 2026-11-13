@@ -3,7 +3,7 @@
     <div class="head">
       <div>
         <div class="page-title">设置</div>
-        <div class="page-sub">主题 / 翻译源 / 账户 —— 配置实时保存到后端</div>
+        <div class="page-sub">翻译源 / 站点 / 存储 —— 配置实时保存到后端</div>
       </div>
     </div>
 
@@ -21,15 +21,6 @@
       <el-button type="primary" size="small" @click="saveSite">保存站点信息</el-button>
     </section>
 
-    <!-- 主题 -->
-    <section class="glass card">
-      <div class="card-title"><el-icon><Brush /></el-icon> 主题</div>
-      <el-radio-group v-model="themeMode" @change="saveTheme">
-        <el-radio-button value="dark">暗黑 · 星夜（默认）</el-radio-button>
-        <el-radio-button value="light">明亮 · 粉紫</el-radio-button>
-      </el-radio-group>
-      <p class="hint">暗黑主题使用二次元背景图；明亮主题为纯渐变底（图片仅登录页显示）。</p>
-    </section>
 
     <!-- 分享管理 -->
     <section class="glass card">
@@ -47,7 +38,7 @@
         </div>
       </div>
       <p v-else class="hint">还没有任何分享 —— 在博客阅读页或个人主页点「分享」即可生成。</p>
-      <p class="hint">快照机制：内容更新后请在分享弹窗点「刷新快照」；撤销后链接立即失效。链接只在服务器对外可达时对方才能打开。</p>
+      <p class="hint">快照机制：内容更新后请在分享弹窗点「刷新快照」；撤销后链接立即失效。链接只在本机打开时可用（本应用不对外提供服务）。</p>
     </section>
 
     <!-- 存储与附件管理 (Asset Garbage Collector) -->
@@ -319,47 +310,11 @@
         提示：支持自由添加任意 OpenAI 兼容的模型服务。填写对应服务网址与 API Key，点击「拉取模型」即可快速完成配置。
       </p>
     </section>
-
-    <!-- 账户 -->
-    <section v-if="!isLocalMode" class="glass card">
-      <div class="card-title"><el-icon><Key /></el-icon> 账户安全</div>
-      <el-form label-position="top" class="pw-form" @submit.prevent>
-        <div class="form-grid">
-          <el-form-item label="旧密码"><el-input v-model="pw.old" type="password" show-password /></el-form-item>
-          <el-form-item label="新密码（≥8 位）"><el-input v-model="pw.next" type="password" show-password /></el-form-item>
-          <el-form-item label="确认新密码"><el-input v-model="pw.confirm" type="password" show-password /></el-form-item>
-        </div>
-        <el-button type="warning" @click="changePassword">修改密码</el-button>
-        <p class="hint">改密会重新加密你的数据密钥并注销其他会话；<b>忘记密码 = 数据无法恢复</b>，请牢记。</p>
-      </el-form>
-
-      <!-- 免密自动解锁：只免掉「每次重启都要输主密码」，加密本身不变 -->
-      <div class="auto-row">
-        <div class="mc-lines">
-          <div class="src-name">本机免密解锁</div>
-          <div class="src-note">
-            开启后服务器重启、开机自启都不再要主密码（用本机密钥自动解开数据密钥）。
-            关闭或点「一键上锁」即恢复必须输入主密码。
-          </div>
-        </div>
-        <el-switch v-model="auto.enabled" @change="toggleAuto" />
-      </div>
-      <p class="hint">
-        本机密钥存放在数据目录{{ auto.keyOutsideData ? '外部独立安全路径' : '内部（.autokey）' }}，已 gitignore，且<b>不在备份包里</b>
-        —— 拿到备份仍然解不开你的数据。它把防线从「主密码」降为「文件权限 + 备份口令」：
-        仍挡住同机其他普通用户，<b>不挡</b> root 与恶意进程。换机器、重装、从备份还原仍需主密码。
-      </p>
-      <p v-if="auto.enabled && !auto.keyOutsideData" class="hint">
-        ⚠️ 当前本机密钥落在数据目录内，会被 <code>deploy/backup.sh</code> 一起打包。
-        建议设 <code>KRUSKAL_AUTOKEY</code> 指到数据目录之外。
-      </p>
-    </section>
   </div>
 </template>
 
 <script setup lang="ts">
 import { onMounted, reactive, ref } from 'vue'
-import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   Cpu,
@@ -371,7 +326,7 @@ import {
   Check,
   CloseBold
 } from '@element-plus/icons-vue'
-import { http, clearToken } from '../api/client'
+import { http } from '../api/client'
 import { loadSite } from '../stores/site'
 import AssetManager from '../components/AssetManager.vue'
 
@@ -399,15 +354,10 @@ const DEFAULT_AI_PROFILES: AiProfile[] = [
   },
 ]
 
-const router = useRouter()
-const isLocalMode = sessionStorage.getItem('krs_local_mode') === '1'
-const themeMode = ref(localStorage.getItem('krs_theme') || 'dark')
 const siteName = ref('Kruskal')
 const siteSlogan = ref('')
 const translateSources = ref<{ id: string; name: string; note: string; need_key: boolean }[]>([])
 const translateSource = ref('youdao-dict')
-const pw = reactive({ old: '', next: '', confirm: '' })
-const auto = reactive({ enabled: false, keyOutsideData: true })
 const locationOrigin = window.location.origin
 const shareItems = ref<{ token: string; target: string; ref: string; title: string; url: string; created: string }[]>([])
 
@@ -461,22 +411,12 @@ function applyDiscoveredModel(m: string) {
   ElMessage.success(`已应用模型名称：${m}`)
 }
 
-function applyTheme(mode: string) {
-  document.documentElement.classList.toggle('theme-dark', mode === 'dark')
-}
-
 async function saveSite() {
   try {
     await http.put('/settings', { updates: { 'site.name': siteName.value, 'site.slogan': siteSlogan.value } })
     await loadSite(true)
     ElMessage.success('站点信息已保存')
   } catch (e: any) { ElMessage.error(e?.response?.data?.detail || '保存失败') }
-}
-
-async function saveTheme() {
-  localStorage.setItem('krs_theme', themeMode.value)
-  applyTheme(themeMode.value)
-  try { await http.put('/settings', { updates: { 'theme.mode': themeMode.value } }) } catch { /* ignore */ }
 }
 
 async function saveTranslate() {
@@ -695,64 +635,6 @@ function loadAiSettings(cfg: Record<string, any>) {
   selectProfileToEdit(activeProfileId.value)
 }
 
-async function changePassword() {
-  if (!pw.old || pw.next.length < 8) return ElMessage.warning('新密码至少 8 位')
-  if (pw.next !== pw.confirm) return ElMessage.warning('两次输入的新密码不一致')
-  try {
-    await http.put('/auth/password', { old_password: pw.old, new_password: pw.next })
-    ElMessage.success('密码已修改，请重新登录')
-    clearToken()
-    setTimeout(() => router.push('/login'), 600)
-  } catch (e: any) {
-    ElMessage.error(e?.response?.data?.detail || '修改失败')
-  }
-}
-
-async function loadAuto() {
-  try {
-    const r = await http.get<{ enabled: boolean; key_outside_data: boolean }>('/auth/auto-unlock')
-    auto.enabled = r.enabled
-    auto.keyOutsideData = r.key_outside_data
-  } catch { /* 401 会跳登录 */ }
-}
-
-async function toggleAuto(v: any) {
-  const on = !!v
-  if (!on) {
-    try {
-      await http.del('/auth/auto-unlock')
-      auto.enabled = false
-      ElMessage.success('已关闭：下次重启需要输入主密码')
-    } catch (e: any) {
-      ElMessage.error(e?.response?.data?.detail || '关闭失败')
-      loadAuto()
-    }
-    return
-  }
-  let pwd = ''
-  try {
-    const r = await ElMessageBox.prompt(
-      '输入当前主密码确认。它只用于在本机生成一份解锁密钥（加密你的数据密钥），不会上传到任何地方。',
-      '开启本机免密解锁',
-      { inputType: 'password', confirmButtonText: '开启', cancelButtonText: '取消',
-        inputValidator: (x: string) => (!!x ? true : '请输入主密码') },
-    )
-    pwd = String(r.value || '')
-  } catch {
-    loadAuto()   // 取消：开关回到真实状态
-    return
-  }
-  try {
-    const r = await http.post<{ key_outside_data: boolean }>('/auth/auto-unlock', { password: pwd })
-    auto.enabled = true
-    auto.keyOutsideData = r.key_outside_data
-    ElMessage.success('已开启：服务器重启后不再需要输入主密码')
-  } catch (e: any) {
-    ElMessage.error(e?.response?.data?.detail || '开启失败')
-    loadAuto()
-  }
-}
-
 async function loadShares() {
   try {
     const r = await http.get<{ items: typeof shareItems.value }>('/share')
@@ -796,12 +678,10 @@ async function loadAll() {
     translateSource.value = cfg['translate.source'] || s.default
     loadAiSettings(cfg)
     loadShares()
-    loadAuto()
-  } catch { /* 401 会跳登录 */ }
+  } catch { /* 会话失效时由 client 统一恢复 */ }
 }
 
 onMounted(() => {
-  applyTheme(themeMode.value)
   loadAll()
 })
 </script>
@@ -947,9 +827,7 @@ onMounted(() => {
 .prov-info { flex: 1; min-width: 0; }
 .prov-name { font-weight: 600; font-size: 14px; }
 .prov-sub { color: var(--txt2); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pw-form { max-width: 720px; }
 .mc-row { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
-.auto-row { display: flex; align-items: center; gap: 12px; margin-top: 6px; }
 .hint.inline { margin: 0; }
 .mc-lines { max-width: 520px; }
 .share-list { display: grid; gap: 8px; }

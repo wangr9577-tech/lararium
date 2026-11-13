@@ -22,7 +22,7 @@ import { strokeBoundsInPage } from '../geometry'
 
 /** 选项生成所依赖的笔刷参数子集（StrokeV3 结构子类型：完整 StrokeV3
  *  与湿墨层的 LiveStroke 都可传入）。 */
-export type BrushParams = Pick<StrokeV3, 'tool' | 'w' | 'tip' | 'sp'>
+export type BrushParams = Pick<StrokeV3, 'tool' | 'w' | 'tip' | 'sp' | 'bv' | 'sensitivity'>
 
 /**
  * 页面固有坐标下的 perfect-freehand 选项（从组件 strokeOpts 898-915 行移植，
@@ -38,14 +38,14 @@ export function strokeOptsPage(stroke: BrushParams, last: boolean, pageW: number
   }
   const tip = stroke.tip || 'pen'
   if (tip === 'ball') {
-    return { size, thinning: 0.12, smoothing: 0.5, streamline: 0.42,
+    return { size, thinning: stroke.bv === 1 ? 0 : 0.12, smoothing: 0.5, streamline: 0.42,
       simulatePressure: true, last }
   }
   if (tip === 'marker') {
     return { size: size * 2.4, thinning: 0, smoothing: 0.5, streamline: 0.5,
       simulatePressure: true, last, start: { cap: true }, end: { cap: true } }
   }
-  return { size, thinning: 0.55, smoothing: 0.5, streamline: 0.5,
+  return { size, thinning: stroke.sensitivity ?? 0.55, smoothing: 0.5, streamline: 0.5,
     simulatePressure: stroke.sp === true, last, end: { taper: 0.4 } }
 }
 
@@ -82,8 +82,7 @@ const MAX_CACHE_ENTRIES = 2000
 /**
  * 已提交笔迹的 Path2D 缓存（LRU，页面固有坐标）。
  *
- *  - 已提交笔迹一律以 last=false 构建（与组件历史笔迹渲染 drawOne(s, false)
- *    一致，保证湿→干视觉一致；湿墨 last=true 由 LiveInkRenderer 单独处理）。
+ *  - 历史笔迹维持 last=false；bv=1 的新笔迹使用 last=true，与湿墨层一致。
  *  - 命中条件：entry.revision === strokeSignature(stroke) 且页面固有宽高一致；
  *    命中则刷新 LRU 位置并返回。
  *  - LRU 上限 2000 条：利用 Map 插入序，超限时淘汰最早插入的 key。
@@ -91,7 +90,7 @@ const MAX_CACHE_ENTRIES = 2000
 export class StrokePathCache {
   private map = new Map<string, CachedStrokePath>()
 
-  /** 获取或构建某笔迹的路径缓存条目（last=false）。 */
+  /** 获取或构建某笔迹的路径缓存条目，按笔刷版本选择末端行为。 */
   getOrBuild(stroke: StrokeV3, pg: PageData): CachedStrokePath {
     const sig = strokeSignature(stroke)
     const existing = this.map.get(stroke.id)
@@ -102,7 +101,7 @@ export class StrokePathCache {
       this.map.set(stroke.id, existing)
       return existing
     }
-    const { path } = buildStrokePath(stroke, pg, false)
+    const { path } = buildStrokePath(stroke, pg, stroke.bv === 1)
     const entry: CachedStrokePath = {
       strokeId: stroke.id,
       revision: sig,

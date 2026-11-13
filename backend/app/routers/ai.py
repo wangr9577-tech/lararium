@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 
 from ..auth import get_current
-from ..services import llm, pdf_text
+from ..ai import llm, workflows, paper_reading
 
 router = APIRouter(prefix="/api/ai", tags=["ai"])
 
@@ -31,23 +31,29 @@ class SummarizeIn(BaseModel):
 @router.post("/summarize")
 def ai_summarize(body: SummarizeIn, _user: dict = Depends(get_current)):
     """论文摘要：优先按 paper_id 取 PDF 抽文本，否则用传入 text。"""
-    def do() -> str:
-        text = body.text or ""
-        if not text and body.paper_id:
-            from .. import vault
-            from ..routers import papers as papers_mod
-            p = papers_mod._pdf_path(body.paper_id)
-            if not p.is_file():
-                raise llm.AiUnavailable("论文文件不存在")
-            text = pdf_text.extract_text(vault.read_bytes(p))
-        if not text.strip():
-            raise llm.AiUnavailable("PDF 无文本层（扫描版无法自动摘要），可手动粘贴摘要输入")
-        prompt = (
-            "请为以下论文内容生成结构化中文摘要，包含：研究问题、方法、主要结果、局限。"
-            "若内容是英文，摘要用中文输出。控制在 400 字以内：\n\n" + text[:18000]
-        )
-        return llm.chat([{"role": "user", "content": prompt}], max_tokens=900)
-    return _run(do)
+    return _run(lambda: workflows.summarize(body.paper_id, body.text))
+
+
+class PaperReadingIn(BaseModel):
+    paper_id: str = Field(min_length=12, max_length=12)
+    page: int = Field(default=1, ge=1)
+    selection: str = Field(default="", max_length=600)
+
+
+@router.post("/paper-summary")
+def paper_summary(body: PaperReadingIn, _user: dict = Depends(get_current)):
+    try:
+        return {"ok": True, **paper_reading.summary(body.paper_id)}
+    except llm.AiUnavailable as exc:
+        return {"ok": False, "reason": str(exc)}
+
+
+@router.post("/paper-explain")
+def paper_explain(body: PaperReadingIn, _user: dict = Depends(get_current)):
+    try:
+        return {"ok": True, **paper_reading.explain(body.paper_id, body.page, body.selection)}
+    except llm.AiUnavailable as exc:
+        return {"ok": False, "reason": str(exc)}
 
 
 class PolishIn(BaseModel):
@@ -57,18 +63,7 @@ class PolishIn(BaseModel):
 
 @router.post("/polish")
 def ai_polish(body: PolishIn, _user: dict = Depends(get_current)):
-    def do() -> str:
-        kind_hint = {
-            "experiment": "Deep learning / Agent 实验结果的英文描述段",
-            "conclusion": "论文结论段",
-            "related_work": "相关工作段",
-        }.get(body.kind, "学术段落")
-        prompt = (
-            f"你正在帮一位研究者把中文草稿润色为地道的英文学术写作（{kind_hint}）。"
-            "保留原意，输出英文，可适度重构句式。若已是英文则润色并纠错。\n\n" + body.text
-        )
-        return llm.chat([{"role": "user", "content": prompt}], max_tokens=1200)
-    return _run(do)
+    return _run(lambda: workflows.polish(body.text, body.kind))
 
 
 class ReportDraftIn(BaseModel):
@@ -77,21 +72,7 @@ class ReportDraftIn(BaseModel):
 
 @router.post("/report-draft")
 def ai_report_draft(body: ReportDraftIn, _user: dict = Depends(get_current)):
-    def do() -> str:
-        lines = []
-        for it in body.items:
-            kind = it.get("kind", "条目")
-            title = it.get("title", "")
-            lines.append(f"- [{kind}] {title}")
-        if not lines:
-            raise llm.AiUnavailable("本周没有可聚合的条目")
-        prompt = (
-            "请根据以下本周科研条目列表，起草一份简洁的中文科研周报（目标：导师/自己回顾用）。"
-            "包含：本周产出要点、进展归纳、下周建议。不要虚构条目内容：\n\n"
-            + "\n".join(lines)
-        )
-        return llm.chat([{"role": "user", "content": prompt}], max_tokens=900)
-    return _run(do)
+    return _run(lambda: workflows.report_draft(body.items))
 
 
 @router.get("/status")

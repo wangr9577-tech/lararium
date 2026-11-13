@@ -54,7 +54,7 @@ export interface WbEntry {
 
 export interface WbLink {
   id: number
-  target_type: 'note' | 'paper' | 'doc' | 'project_doc' | string
+  target_type: 'note' | 'paper' | string
   target_id: string
   title: string
   route: string
@@ -88,9 +88,9 @@ export interface WbItemDetail extends WbItemBrief {
   siblings: { id: number; title: string }[]
 }
 
-/** 搜索选择器候选资料（现有论文 / 笔记·博客 / 项目文档） */
+/** 搜索选择器候选资料（现有论文 / 笔记·博客） */
 export interface WbCandidate {
-  target_type: 'note' | 'paper' | 'doc' | 'project_doc' | string
+  target_type: 'note' | 'paper' | string
   target_id: string
   title: string
   kind: string
@@ -183,7 +183,7 @@ export const workbenchApi = {
     http.get<{ items: WbLink[] }>(`/workbench/items/${itemId}/links`),
 
   /** 关联已有资料；后端幂等（同一事项内同资料只保留一条），重复调用不会产生重复链接 */
-  addLink: (itemId: number, targetType: 'note' | 'paper' | 'doc' | 'project_doc' | string, targetId: string) =>
+  addLink: (itemId: number, targetType: 'note' | 'paper' | string, targetId: string) =>
     http.post<{ ok: true; created: boolean; link_id: number | null }>(
       `/workbench/items/${itemId}/links`, { target_type: targetType, target_id: targetId }),
 
@@ -196,13 +196,13 @@ export const workbenchApi = {
     http.get<{ linked: boolean; link_id: number | null }>(
       `/workbench/items/${itemId}/note-link${qs({ note_id: noteId })}`),
 
-  /** 反向引用查询：查询某篇笔记、论文或文档被哪些工作台事项引用 */
+  /** 反向引用查询：查询某篇笔记或论文被哪些工作台事项引用 */
   getBacklinks: (targetType: string, targetId: string) =>
     http.get<{ items: WbBacklinkItem[] }>(
       `/workbench/links/backlinks${qs({ target_type: targetType, target_id: targetId })}`),
 
-  /** 搜索可关联的现有资料（kind: all | note | paper | doc | project_doc） */
-  selector: (q = '', kind: 'all' | 'note' | 'paper' | 'doc' | 'project_doc' | string = 'all', limit = 30) =>
+  /** 搜索可关联的现有资料（kind: all | note | paper） */
+  selector: (q = '', kind: 'all' | 'note' | 'paper' | string = 'all', limit = 30) =>
     http.get<{ items: WbCandidate[]; total: number }>(
       `/workbench/selector${qs({ q, kind, limit })}`),
 }
@@ -232,7 +232,5 @@ export function kindLabel(kind: string): string {
     note: '学习笔记',
     project: '项目经历',
     paper: '论文',
-    doc: '项目文档',
-    project_doc: '项目文档',
   } as Record<string, string>)[kind] || kind
 }

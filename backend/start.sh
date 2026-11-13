@@ -22,7 +22,7 @@ fi
 RELOAD_ARGS=()
 if [ "${KRUSKAL_DEV:-0}" = "1" ]; then
   RELOAD_ARGS+=(--reload)
-  echo "[kruskal] DEV 模式：--reload 已开（注意：每次重载都会清空内存密钥，需重新登录解锁）"
+  echo "[kruskal] DEV 模式：--reload 已开（注意：每次重载都会清空内存密钥，需重启服务重新解锁）"
 fi
 
 echo "[kruskal] starting on $HOST:$PORT (数据目录见 config.py)"

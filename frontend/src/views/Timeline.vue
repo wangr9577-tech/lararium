@@ -110,7 +110,7 @@ onMounted(async () => {
     const r = await http.get<{ items: TlItem[] }>('/timeline')
     items.value = r.items
     if (years.value.length) selYear.value = years.value[0]
-  } catch { /* 401/423 跳登录 */ }
+  } catch { /* 会话失效由 client 统一处理 */ }
 })
 </script>
 

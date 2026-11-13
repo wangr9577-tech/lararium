@@ -3,7 +3,6 @@
     <div class="head">
       <div>
         <div class="page-title">笔记 · 博客</div>
-        <div class="page-sub">学习笔记 / 博客文章 / 项目经历 —— 全部在网页上创建与修改</div>
       </div>
       <div class="head-ops">
         <el-button :loading="importing" @click="pickImport" title="导入 .pptx / .pdf 成为可直接书写的多页笔记（也可把文件拖到页面上）">
@@ -55,8 +54,8 @@
         </div>
       </div>
       <div v-else class="dir-hint">
-        <template v-if="selFolder === null">还没有目录<br>点右上角「新建目录」，把笔记分门别类</template>
-        <template v-else>这个目录下还没有子目录<br>点右上角「新建子目录」继续细分</template>
+        <template v-if="selFolder === null">还没有目录</template>
+        <template v-else>还没有子目录</template>
       </div>
 
       <!-- 筛选条 -->
@@ -87,7 +86,7 @@
       <!-- 未分类分组标题（仅根视图且非搜索态，文章只在其最邻近上级目录显示） -->
       <div v-if="selFolder === null && !searchAll && items.length" class="group-label">未分类（{{ uncatCnt }} 篇）</div>
       <!-- 全库搜索提示条（搜索框非空时跨目录搜索） -->
-      <div v-if="searchAll" class="search-hint">全库搜索中（跨目录）· 找到 {{ realNotes }} 篇 · 清空搜索框回到当前目录</div>
+      <div v-if="searchAll" class="search-hint">全库搜索 · {{ realNotes }} 篇</div>
 
       <!-- 列表容器：首屏/刷新期间 v-loading 加载态，避免慢网无反馈、空状态误判 -->
       <div class="list-wrap" v-loading="listLoading">
@@ -314,6 +313,7 @@
 </template>
 
 <script setup lang="ts">
+import { clientState } from '../api/clientState'
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -346,8 +346,8 @@ const router = useRouter()
 const q = ref('')
 const type = ref('')
 const tag = ref('')
-/** 排序：'updated'=最新更新（后端文件更新时间倒序，默认）；'title'=标题 A-Z（中文 zh-Hans-CN）。持久化到 localStorage；仅接受 'title'，其余（含非法值）回落 'updated' */
-const sortBy = ref<'updated' | 'title'>(localStorage.getItem('krs_notes_sort') === 'title' ? 'title' : 'updated')
+/** 排序：'updated'=最新更新（后端文件更新时间倒序，默认）；'title'=标题 A-Z（中文 zh-Hans-CN）。持久化到服务端；仅接受 'title'，其余（含非法值）回落 'updated' */
+const sortBy = ref<'updated' | 'title'>(clientState.getItem('krs_notes_sort') === 'title' ? 'title' : 'updated')
 const items = ref<Note[]>([])
 const listLoading = ref(true) // 列表加载态：首屏/刷新期间为 true，避免慢网无反馈、请求返回前空状态误判
 const tags = ref<{ name: string; count: number }[]>([])
@@ -472,9 +472,9 @@ function clearFilters() {
   tag.value = ''
 }
 
-/** 排序方式变更：持久化到 localStorage（纯前端本地排序，不重新请求接口） */
+/** 排序方式变更：持久化到服务端（纯前端本地排序，不重新请求接口） */
 function onSortChange() {
-  localStorage.setItem('krs_notes_sort', sortBy.value)
+  clientState.setItem('krs_notes_sort', sortBy.value)
 }
 
 /** 雅思虚拟卡是否命中当前筛选（仅根视图「未分类」展示） */

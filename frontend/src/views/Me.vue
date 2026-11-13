@@ -154,7 +154,7 @@ onMounted(async () => {
     honors.value = cfg['me.honors'] || []
     publications.value = cfg['me.publications'] || []
     milestones.value = cfg['me.milestones'] || []
-  } catch { /* 401/423 统一跳登录 */ }
+  } catch { /* 会话失效由 client 统一处理 */ }
   loading.value = false
 })
 </script>

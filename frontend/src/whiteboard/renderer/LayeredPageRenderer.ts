@@ -439,7 +439,7 @@ export class LayeredPageRenderer {
       cssH: rt.cssHeight,
       dpr: rt.dpr,
       strokes: pg.strokes.map<WStroke>((s) => ({
-        id: s.id, tool: s.tool, color: s.color, w: s.w, tip: s.tip, sp: s.sp,
+        id: s.id, tool: s.tool, color: s.color, w: s.w, tip: s.tip, sp: s.sp, bv: s.bv, sensitivity: s.sensitivity, opacity: s.opacity,
         pts: s.pts.map((p) => ({ x: p.x, y: p.y, p: p.p })),
       })),
     }

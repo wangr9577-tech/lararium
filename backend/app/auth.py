@@ -1,19 +1,22 @@
-"""认证基建：密码哈希(PBKDF2)、单用户 admin 引导、token 会话、请求鉴权依赖。"""
+"""本机单用户会话基建：无账号密码，靠启动时解锁的数据密钥 + Bearer token 维持访问。
+
+应用只在本机运行（见 main.py 启动流程）：
+  1. 启动时用本机密钥 `.autokey` 解开 `.kek.auto`，把 DEK 放进 vault；
+  2. 浏览器通过 `POST /api/auth/local-session` 换取 token；
+  3. 之后所有 `/api` 请求带 `Authorization: Bearer <token>`，由 token_user 判定。
+
+`users` 表沿用旧库结构（保留 pw_hash/salt 两列以兼容已存在的数据目录），
+但不再写入密码，只作为 token 的归属记录。
+"""
 from __future__ import annotations
 
-import hashlib
-import json
-import os
 import secrets
-import string
 from datetime import datetime, timedelta
 
 from fastapi import Header, HTTPException
 
-from . import config, crypto
+from . import config
 from .db import db
-
-_ITER = 600_000
 
 
 def now_iso() -> str:
@@ -24,50 +27,20 @@ def _now() -> datetime:
     return datetime.now()
 
 
-def hash_password(password: str, salt_hex: str | None = None) -> tuple[str, str]:
-    salt = salt_hex or secrets.token_hex(16)
-    digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), bytes.fromhex(salt), _ITER)
-    return salt, digest.hex()
-
-
-def verify_password(password: str, salt_hex: str, hash_hex: str) -> bool:
-    _, recomputed = hash_password(password, salt_hex)
-    return secrets.compare_digest(recomputed, hash_hex)
-
-
-def bootstrap_admin() -> None:
-    """首次启动创建默认账号 admin + 随机密码，密码写入 data/initial_password.txt。"""
+def ensure_local_user() -> dict:
+    """确保本机唯一用户存在（不设密码），返回 {id, username}。"""
     with db() as conn:
-        row = conn.execute("SELECT id FROM users LIMIT 1").fetchone()
-        if row:
-            return
-        pw = "".join(secrets.choice(string.ascii_letters + string.digits) for _ in range(12))
-        salt, h = hash_password(pw)
-        conn.execute(
+        row = conn.execute("SELECT id, username FROM users ORDER BY id LIMIT 1").fetchone()
+        if row is not None:
+            return {"id": row["id"], "username": row["username"]}
+        cur = conn.execute(
             "INSERT INTO users(username, pw_hash, salt, created_at) VALUES(?,?,?,?)",
-            (config.ADMIN_USERNAME, h, salt, now_iso()),
+            (config.ADMIN_USERNAME, "", "", now_iso()),
         )
-    try:
-        config.INIT_PW_FILE.write_text(
-            f"Kruskal 初始账号\n账号: {config.ADMIN_USERNAME}\n密码: {pw}\n\n"
-            "登录后请立即在 设置 → 账户 中修改密码；修改成功后本文件会自动删除。\n"
-        )
-        os.chmod(config.INIT_PW_FILE, 0o600)
-    except OSError:
-        pass
-    print(f"[kruskal] 首次启动，已创建初始管理员账号 {config.ADMIN_USERNAME}。"
-          "初始密码已写入独立安全凭据文件，请查阅并登录后立即修改密码。")
+    return {"id": int(cur.lastrowid), "username": config.ADMIN_USERNAME}
 
 
-def ensure_keywrap(password: str) -> None:
-    """首次登录时创建数据密钥包裹；已存在则跳过。"""
-    if not config.KEYWRAP_PATH.exists():
-        payload, _ = crypto.create_keywrap(password)
-        from . import vault
-        vault.atomic_write_bytes(config.KEYWRAP_PATH, json.dumps(payload).encode("utf-8"))
-
-
-MAX_ACTIVE_SESSIONS = 20  # 每用户活跃会话封顶，超出挤掉最旧（P1：token 治理）
+MAX_ACTIVE_SESSIONS = 20  # 本机活跃会话封顶，超出挤掉最旧（P1：token 治理）
 
 
 def issue_token(user_id: int) -> str:
@@ -98,11 +71,6 @@ def revoke_token(token: str) -> None:
         conn.execute("DELETE FROM tokens WHERE token=?", (token,))
 
 
-def revoke_all_for(user_id: int) -> None:
-    with db() as conn:
-        conn.execute("DELETE FROM tokens WHERE user_id=?", (user_id,))
-
-
 def token_user(token: str) -> dict | None:
     """token → 用户（无效/过期返回 None）。供鉴权依赖与全局中间件共用一份判定。"""
     if not token:
@@ -118,8 +86,8 @@ def token_user(token: str) -> dict | None:
 
 def get_current(authorization: str = Header(default="")) -> dict:
     if not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="未登录")
+        raise HTTPException(status_code=401, detail="未建立本机会话")
     user = token_user(authorization[7:])
     if user is None:
-        raise HTTPException(status_code=401, detail="登录已过期，请重新登录")
+        raise HTTPException(status_code=401, detail="本机会话已失效，请刷新页面")
     return user
